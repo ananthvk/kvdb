@@ -1,6 +1,9 @@
 package kvdb
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestStoreBasicTests(t *testing.T) {
 	store, err := NewDataStore(":test")
@@ -25,7 +28,7 @@ func TestStoreBasicTests(t *testing.T) {
 
 	// Test Get non-existent key
 	_, err = store.Get([]byte("nonexistent"))
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 
@@ -35,7 +38,7 @@ func TestStoreBasicTests(t *testing.T) {
 	}
 
 	_, err = store.Get(key)
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -48,7 +51,7 @@ func TestStoreBasicTests(t *testing.T) {
 	}
 
 	// Test Fold
-	acc, _ := store.Fold(func(k, v []byte, acc any) any {
+	acc, _ := Fold(store, func(k, v []byte, acc any) any {
 		return acc.(int) + 1
 	}, 0)
 	if acc.(int) != 2 {

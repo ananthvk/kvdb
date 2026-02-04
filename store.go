@@ -65,7 +65,9 @@ func (dataStore *DataStore) ListKeys() ([]string, error) {
 
 // Fold applies a function to each key-value pair in the datastore, accumulating a result starting from the initial accumulator value.
 // NOTE: The function *MUST* not attempt to mutate the key slice, since it's an unsafe cast, and might lead to undefined behavior.
-func (dataStore *DataStore) Fold(fun func(key []byte, value []byte, acc0 any) any, acc0 any) (any, error) {
+// Fold is implemented as a free function, because Go does not support generic methods. Generic methods are needed since `any` causes
+// unnecessary memory allocations due to boxing/unboxing
+func Fold[T any](dataStore *DataStore, fun func(key []byte, value []byte, acc0 T) T, acc0 T) (T, error) {
 	for k, v := range dataStore.mp {
 		view := unsafe.Slice(unsafe.StringData(k), len(k))
 		acc0 = fun(view, v, acc0)
