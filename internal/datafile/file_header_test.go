@@ -11,16 +11,10 @@ import (
 
 func TestWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	file, err := testFS.Create("0.dat")
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
 	ts := time.Now()
-	header := NewFileHeader(ts, FILE_HEADER_SIZE)
+	header := NewFileHeader(ts, fileHeaderSize)
 
-	if err := WriteFileHeader(header, file); err != nil {
+	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
@@ -34,12 +28,12 @@ func TestWriteFileHeader(t *testing.T) {
 	}
 
 	// Check size
-	if len(fileContents) != FILE_HEADER_SIZE {
-		t.Errorf("expected header to be of size %d, got %d", FILE_HEADER_SIZE, len(fileContents))
+	if len(fileContents) != fileHeaderSize {
+		t.Errorf("expected header to be of size %d, got %d", fileHeaderSize, len(fileContents))
 	}
 
 	// Check if the header was written correctly
-	for i, b := range FILE_HEADER_MAGIC_BYTES {
+	for i, b := range fileHeaderMagicBytes {
 		if fileContents[i] != b {
 			t.Errorf("expected magic byte at index %d to be %d, got %d", i, b, fileContents[i])
 		}
@@ -48,26 +42,15 @@ func TestWriteFileHeader(t *testing.T) {
 
 func TestReadWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	file, err := testFS.Create("0.dat")
-	if err != nil {
-		t.Fatalf("failed to create file: %v", err)
-	}
-	defer file.Close()
 
 	ts := time.Now()
-	header := NewFileHeader(ts, FILE_HEADER_SIZE)
+	header := NewFileHeader(ts, fileHeaderSize)
 
-	if err := WriteFileHeader(header, file); err != nil {
+	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
-	f, err := testFS.Open("0.dat")
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer f.Close()
-
-	readHeader, err := ReadFileHeader(f)
+	readHeader, err := ReadFileHeader(testFS, "0.dat")
 	if err != nil {
 		t.Fatalf("failed to read header: %v", err)
 	}
@@ -102,14 +85,7 @@ func TestReadFileHeader_InvalidMagicBytes(t *testing.T) {
 	file.Write([]byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9})
 	file.Sync()
 
-	// Attempt to read the header
-	f, err := testFS.Open("invalid_magic.dat")
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer f.Close()
-
-	_, err = ReadFileHeader(f)
+	_, err = ReadFileHeader(testFS, "invalid_magic.dat")
 	if !errors.Is(err, ErrNotDataFile) {
 		t.Fatalf("expected ErrNotDataFile error due to invalid magic bytes, got error %v", err)
 	}
@@ -123,7 +99,7 @@ func TestReadFileHeader_IncompatibleVersion(t *testing.T) {
 	defer file.Close()
 
 	// Write valid magic bytes
-	if _, err := file.Write(FILE_HEADER_MAGIC_BYTES[:]); err != nil {
+	if _, err := file.Write(fileHeaderMagicBytes[:]); err != nil {
 		t.Fatalf("failed to write magic bytes: %v", err)
 	}
 
@@ -146,14 +122,7 @@ func TestReadFileHeader_IncompatibleVersion(t *testing.T) {
 	file.Write([]byte{0x00})
 	file.Sync()
 
-	// Attempt to read the header
-	f, err := testFS.Open("incompatible_version.dat")
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer f.Close()
-
-	_, err = ReadFileHeader(f)
+	_, err = ReadFileHeader(testFS, "incompatible_version.dat")
 	if !errors.Is(err, ErrDataFileVersionNotCompatible) {
 		t.Fatalf("expected ErrDataFileVersionNotCompatible error due to incompatible version, got error %v", err)
 	}
