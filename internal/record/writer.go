@@ -4,49 +4,22 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"os"
-	"time"
 
 	"github.com/spf13/afero"
 )
 
-const (
-	recordHeaderSize = 20
-	recordTypePut    = 0x50
-	recordTypeDelete = 0x44
-)
-
-type record struct {
-	Crc        uint32
-	Timestamp  time.Time
-	KeySize    uint32
-	ValueSize  uint32
-	RecordType uint8
-	ValueType  uint8
-	Key        []byte
-	Value      []byte
-}
-
-func newRecord(key []byte, value []byte, recordType uint8) *record {
-	return &record{
-		Timestamp:  time.Now(),
-		KeySize:    uint32(len(key)),
-		ValueSize:  uint32(len(value)),
-		RecordType: recordType,
-		ValueType:  0x0,
-		Key:        key,
-		Value:      value,
-	}
-}
-
+// Writer is responsible for writing log records to the file. There are no locks in this implementation, so it's
+// unsafe to call Writer methods concurrently
 type Writer struct {
 	fs   afero.Fs
 	file afero.File
-	// Internal buffer used to write record header
+	// Internal buffer used to temporarily hold record header
 	buf [recordHeaderSize]byte
 }
 
+// NewWriter creates a new Record Writer that opens a file at the specified path for appending logs
 func NewWriter(fs afero.Fs, path string) (*Writer, error) {
-	file, err := fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
+	file, err := fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
 	if err != nil {
 		return nil, err
 	}
@@ -56,17 +29,17 @@ func NewWriter(fs afero.Fs, path string) (*Writer, error) {
 	}, nil
 }
 
-func (w *Writer) writeRecord(r *record) error {
+// writeRecord writes the key-value record to the file. It writes the record header, followed by the key & value, then the CRC checksum
+func (w *Writer) writeRecord(r *Record) error {
 	h := crc32.NewIEEE()
-
 	// Set header fields
-	binary.LittleEndian.PutUint64(w.buf[0:], uint64(r.Timestamp.UnixMicro())) // Unix timestamp (in microseconds)
-	binary.LittleEndian.PutUint32(w.buf[8:], r.KeySize)                       // Length of key
-	binary.LittleEndian.PutUint32(w.buf[12:], r.ValueSize)                    // Length of value
-	w.buf[16] = r.RecordType                                                  // Type of record, 0x50 for PUT, and 0x44 for DELETE
-	w.buf[17] = r.ValueType                                                   // Currently value type is unused
-	w.buf[18] = 0x0                                                           // Reserved
-	w.buf[19] = 0x0                                                           // Reserved
+	binary.LittleEndian.PutUint64(w.buf[0:], uint64(r.Header.Timestamp.UnixMicro())) // Unix timestamp (in microseconds)
+	binary.LittleEndian.PutUint32(w.buf[8:], r.Header.KeySize)                       // Length of key
+	binary.LittleEndian.PutUint32(w.buf[12:], r.Header.ValueSize)                    // Length of value
+	w.buf[16] = r.Header.RecordType                                                  // Type of record, 0x50 for PUT, and 0x44 for DELETE
+	w.buf[17] = r.Header.ValueType                                                   // Currently value type is unused
+	w.buf[18] = 0x0                                                                  // Reserved
+	w.buf[19] = 0x0                                                                  // Reserved
 
 	// Update CRC with header info
 	h.Write(w.buf[:])
@@ -92,20 +65,29 @@ func (w *Writer) writeRecord(r *record) error {
 	return nil
 }
 
+// WriteKeyValue writes the key-value pair as a new log entry to the file. It does not call sync(), so there
+// is a chance that data might get lost if the system crashes. If you need durability, call Sync() after writing
 func (w *Writer) WriteKeyValue(key []byte, value []byte) error {
 	rec := newRecord(key, value, recordTypePut)
 	return w.writeRecord(rec)
 }
 
+// WriteTombstone writes a tombstone value for the specified key, this function is to be used
+// to delete a key from the store.
 func (w *Writer) WriteTombstone(key []byte) error {
 	rec := newRecord(key, nil, recordTypeDelete)
 	return w.writeRecord(rec)
 }
 
+// Sync flushes any buffered data to the underlying file. It calls sync() on the file
 func (w *Writer) Sync() error {
 	return w.file.Sync()
 }
 
+// Close closes the underlying file, it also writes any pending changes and syncs the changes to the disk
 func (w *Writer) Close() error {
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
 	return w.file.Close()
 }

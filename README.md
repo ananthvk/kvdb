@@ -21,21 +21,21 @@ The file header is `24 bytes` in size
 
 ### Log Format
 
-Each log entry in the data file contains a log header (`24 bytes`) followed by variable length key and value
+Each log entry in the data file contains a log header (`20 bytes`) followed by variable length key and value, followed by the CRC of the header + key + value
 
 Log record:
 
 | Name        | Offset | Size (bytes)  | Type     | Comments                                                           |
 | ----------- | ------ | ------------- | -------- | ------------------------------------------------------------------ |
-| CRC         | 0      | 4             | uint32_t | CRC covers record header (excluding CRC field) + key + value       |
-| Timestamp   | 4      | 8             | int64_t | Timestamp of log entry (for debug / informational)                 |
-| Key size    | 12     | 4             | uint32_t | Size of the key (Note: this restricts max key size to around 4Gib) |
-| Value size  | 16     | 4             | uint32_t | Size of the value (Same restriction as above)                      |
-| Record type | 20     | 1             | uint8_t  | Type of record                                                     |
-| Value type  | 21     | 1             | uint8_t  | Type of value (future use)                                         |
-| Reserved    | 22     | 2             | uint16_t | Reserved for future use                                            |
-| Key         | 24     | Variable size | byte seq | Key                                                                |
+| Timestamp   | 0      | 8             | int64_t | Timestamp of log entry (for debug / informational)                 |
+| Key size    | 8      | 4             | uint32_t | Size of the key (Note: this restricts max key size to around 4Gib) |
+| Value size  | 12     | 4             | uint32_t | Size of the value (Same restriction as above)                      |
+| Record type | 16     | 1             | uint8_t  | Type of record                                                     |
+| Value type  | 17     | 1             | uint8_t  | Type of value (future use)                                         |
+| Reserved    | 18     | 2             | uint16_t | Reserved for future use                                            |
+| Key         | 20     | Variable size | byte seq | Key                                                                |
 | Value<br>   | -      | Variable size | byte seq | Value                                                              |
+| CRC         | -      | 4             | uint32_t | CRC covers record header + key + value       |
 
 Note: Timestamps are unix timestamps, in microsecond format
 

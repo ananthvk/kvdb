@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/spf13/afero"
@@ -108,7 +109,7 @@ func ReadFileHeader(fs afero.Fs, path string) (*FileHeader, error) {
 // Only `Offset` and `Timestamp` are read from the passed struct, version fields are ignored, and are instead considered
 // from the hardcoded constants. Note if it's called on an existing file, the contents of the file is erased
 func WriteFileHeader(fs afero.Fs, path string, fileHeader *FileHeader) error {
-	file, err := fs.Create(path)
+	file, err := fs.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return err
 	}
