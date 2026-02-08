@@ -29,7 +29,7 @@ func main() {
 
 	fmt.Println("Welcome to kvdb cli, type \"exit\" to quit")
 	// TODO: NOTE: Cannot set/get a key called \key, introduce escape sequence or quotes "" to avoid this
-	fmt.Println("To set a value, use <key>=<value>, to retrieve a value just type <key>, to get all keys type \\keys")
+	fmt.Println("To set a value, use <key>=<value>, to retrieve a value just type <key>, to get all keys type \\keys, to delete a key \\delete <key>")
 	fmt.Println("Note: Spaces matter, so key =value is different from key=value")
 	fmt.Print("> ")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -56,6 +56,18 @@ func main() {
 		case "\\size":
 			output = fmt.Sprintf("%d", store.Size())
 		default:
+			if after, ok := strings.CutPrefix(query, "\\delete "); ok {
+				key := after
+				err := store.Delete([]byte(key))
+				if err != nil {
+					output = fmt.Sprintf("(error) DELETE: %s", err)
+				} else {
+					output = "OK"
+				}
+				fmt.Println(output)
+				fmt.Print("> ")
+				continue
+			}
 			before, after, found := strings.Cut(query, "=")
 			if found {
 				// A SET operation
