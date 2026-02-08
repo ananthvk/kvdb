@@ -5,7 +5,7 @@ import "time"
 const (
 	recordHeaderSize = 20
 	recordTypePut    = 0x50
-	recordTypeDelete = 0x44
+	RecordTypeDelete = 0x44
 )
 
 // Header contains metadata information about a log record

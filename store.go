@@ -1,79 +1,163 @@
 package kvdb
 
 import (
-	"fmt"
-	"unsafe"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/ananthvk/kvdb/internal/datafile"
+	"github.com/ananthvk/kvdb/internal/record"
+	"github.com/spf13/afero"
 )
 
-// DataStore implements a Key-Value storage that can be used to store arbitrary keys and values
+// No Keydir for now, just do a linear scan of the entire file
+
 type DataStore struct {
-	// Key-Value store implemented using Go standard map
-	// []byte cannot be used as map key, but due to compiler optimization, a new string will not be initialized
-	// https://go.dev/wiki/CompilerOptimizations#string-and-byte
-	mp map[string][]byte
+	fs     afero.Fs
+	path   string
+	reader *record.Reader
+	writer *record.Writer
 }
 
-// NewDataStore creates a new datastore at the specified location, if a datastore already exists at the given location
-// the existing datastore will be opened instead
-func NewDataStore(directoryPath string) (*DataStore, error) {
+// Create creates a single file datastore at the given path
+func Create(fs afero.Fs, path string) (*DataStore, error) {
+	if err := fs.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+		return nil, err
+	}
+
+	// Write the file header
+	err := datafile.WriteFileHeader(fs, path, datafile.NewFileHeader(time.Now(), 0))
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := record.NewReader(fs, path, datafile.FileHeaderSize)
+	if err != nil {
+		return nil, err
+	}
+
+	writer, err := record.NewWriter(fs, path)
+	if err != nil {
+		return nil, err
+	}
+
 	return &DataStore{
-		mp: map[string][]byte{},
+		fs:     fs,
+		path:   path,
+		reader: reader,
+		writer: writer,
 	}, nil
 }
 
 // Open opens the datastore at the specified location. If the datastore does not exist, an error is returned
-func Open(directoryPath string) (*DataStore, error) {
+func Open(fs afero.Fs, path string) (*DataStore, error) {
+	exists, err := afero.Exists(fs, path)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotExist
+	}
+	// Check if it's a datafile
+	header, err := datafile.ReadFileHeader(fs, path)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := record.NewReader(fs, path, int64(header.Offset))
+	if err != nil {
+		return nil, err
+	}
+
+	writer, err := record.NewWriter(fs, path)
+	if err != nil {
+		return nil, err
+	}
+
 	return &DataStore{
-		mp: map[string][]byte{},
+		fs:     fs,
+		path:   path,
+		reader: reader,
+		writer: writer,
 	}, nil
 }
 
 // Get returns the value associated with the key. If the key does not exist, `ErrNotFound` is returned, in case of any
 // other errors, the error is returned
 func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
-	val, ok := dataStore.mp[string(key)]
-	if !ok {
-		return nil, fmt.Errorf("%w - %q", ErrNotFound, key)
+	var offset int64 = 0
+	var value []byte
+	var valuePresent bool
+	// TODO: It is more efficient to scan the datastore in reverse
+	// Since we can stop at first match
+	for {
+		rec, err := dataStore.reader.ReadRecordAtStrict(offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		if string(rec.Key) == string(key) {
+			if rec.Header.RecordType == record.RecordTypeDelete {
+				valuePresent = false
+				value = nil
+			} else {
+				value = rec.Value
+				valuePresent = true
+			}
+		}
+		offset += rec.Size
 	}
-	return val, nil
+	if valuePresent {
+		return value, nil
+	} else {
+		return nil, ErrKeyNotFound
+	}
 }
 
 // Put sets the value for the specified key. It returns an error if the operation was not successful
 func (dataStore *DataStore) Put(key []byte, value []byte) error {
-	dataStore.mp[string(key)] = value
-	return nil
+	_, err := dataStore.writer.WriteKeyValue(key, value)
+	return err
 }
 
 // Delete deletes the value associated with the specified key. No error will be returned if the key does not exist.
 // An error is returned if the deletion failed due to some other reason.
 func (dataStore *DataStore) Delete(key []byte) error {
-	delete(dataStore.mp, string(key))
-	return nil
+	_, err := dataStore.writer.WriteTombstone(key)
+	return err
 }
 
-// ListKeys returns a list of all keys in the datastore. Note: This returns a slice of string, and is intended to be
+// ListKeys returns a list of all keys in the datastore. Note: This is intended to be
 // used for debug or inspection.
-func (dataStore *DataStore) ListKeys() ([]string, error) {
-	keys := make([]string, len(dataStore.mp))
-	idx := 0
-	for key := range dataStore.mp {
-		keys[idx] = key
-		idx++
+func (dataStore *DataStore) ListKeys() ([][]byte, error) {
+	keyMap := make(map[string]struct{})
+	var offset int64 = 0
+	for {
+		rec, err := dataStore.reader.ReadKeyAt(offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				keys := make([][]byte, 0, len(keyMap))
+				for k := range keyMap {
+					keys = append(keys, []byte(k))
+				}
+				return keys, nil
+			}
+			return nil, err
+		}
+		if rec.Header.RecordType == record.RecordTypeDelete {
+			delete(keyMap, string(rec.Key))
+		} else {
+			keyMap[string(rec.Key)] = struct{}{}
+		}
+		offset += rec.Size
 	}
-	return keys, nil
 }
 
-// Fold applies a function to each key-value pair in the datastore, accumulating a result starting from the initial accumulator value.
-// NOTE: The function *MUST* not attempt to mutate the key slice, since it's an unsafe cast, and might lead to undefined behavior.
-// Fold is implemented as a free function, because Go does not support generic methods. Generic methods are needed since `any` causes
-// unnecessary memory allocations due to boxing/unboxing
-func Fold[T any](dataStore *DataStore, fun func(key []byte, value []byte, acc0 T) T, acc0 T) (T, error) {
-	for k, v := range dataStore.mp {
-		view := unsafe.Slice(unsafe.StringData(k), len(k))
-		acc0 = fun(view, v, acc0)
-	}
-	return acc0, nil
-}
+// TODO: Implement fold
 
 func (dataStore *DataStore) Merge(directoryPath string) error {
 	// nop
@@ -81,17 +165,27 @@ func (dataStore *DataStore) Merge(directoryPath string) error {
 }
 
 func (dataStore *DataStore) Sync() error {
-	// nop
-	return nil
+	return dataStore.writer.Sync()
 }
 
 // Size returns the number of keys present in the datastore
 func (dataStore *DataStore) Size() int {
-	return len(dataStore.mp)
+	// TODO: Implement later
+	return 0
 }
 
 // Close closes the datastore, writes pending changes (if any), and frees resources
 func (dataStore *DataStore) Close() error {
-	clear(dataStore.mp)
+	if err := dataStore.writer.Sync(); err != nil {
+		return err
+	}
+	err1 := dataStore.writer.Close()
+	err2 := dataStore.reader.Close()
+	if err1 != nil {
+		return err1
+	}
+	if err2 != nil {
+		return err2
+	}
 	return nil
 }

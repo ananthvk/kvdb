@@ -3,10 +3,15 @@ package kvdb
 import (
 	"errors"
 	"testing"
+
+	"github.com/spf13/afero"
 )
 
+// TODO: Add tests for opening existing db
+
 func TestStoreBasicTests(t *testing.T) {
-	store, err := NewDataStore(":test")
+	fs := afero.NewMemMapFs()
+	store, err := Create(fs, "0.dat")
 	if err != nil {
 		t.Fatalf("error occured while creating datastore")
 	}
@@ -17,7 +22,6 @@ func TestStoreBasicTests(t *testing.T) {
 	if err := store.Put(key, value); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
-
 	val, err := store.Get(key)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -28,7 +32,7 @@ func TestStoreBasicTests(t *testing.T) {
 
 	// Test Get non-existent key
 	_, err = store.Get([]byte("nonexistent"))
-	if !errors.Is(err, ErrNotFound) {
+	if !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 
@@ -38,7 +42,7 @@ func TestStoreBasicTests(t *testing.T) {
 	}
 
 	_, err = store.Get(key)
-	if !errors.Is(err, ErrNotFound) {
+	if !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -50,14 +54,6 @@ func TestStoreBasicTests(t *testing.T) {
 		t.Errorf("expected 2 keys, got %d", len(keys))
 	}
 
-	// Test Fold
-	acc, _ := Fold(store, func(k, v []byte, acc any) any {
-		return acc.(int) + 1
-	}, 0)
-	if acc.(int) != 2 {
-		t.Errorf("expected 2 items, got %d", acc.(int))
-	}
-
 	// Test Close
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
@@ -65,7 +61,8 @@ func TestStoreBasicTests(t *testing.T) {
 }
 
 func TestStoreMultiple(t *testing.T) {
-	store, err := NewDataStore(":test")
+	fs := afero.NewMemMapFs()
+	store, err := Create(fs, "0.dat")
 	if err != nil {
 		t.Fatalf("error occured while creating datastore")
 	}

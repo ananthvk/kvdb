@@ -6,14 +6,24 @@ import (
 	"os"
 	"strings"
 
-	kvdb "github.com/ananthvk/kvdb"
+	"github.com/ananthvk/kvdb"
+	"github.com/spf13/afero"
 )
 
 func main() {
-	store, err := kvdb.NewDataStore(":memory")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "(error) OPEN: %s", err)
+	fs := afero.NewOsFs()
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: kvcli <path>")
 		os.Exit(1)
+	}
+	store, err := kvdb.Open(fs, os.Args[1])
+	if err != nil {
+		// Try creating it
+		store, err = kvdb.Create(fs, os.Args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "(error) CREATE: %s", err)
+			os.Exit(1)
+		}
 	}
 	defer store.Close()
 
@@ -33,12 +43,16 @@ func main() {
 		case "":
 			continue
 		case "\\keys":
-			op, err := store.ListKeys()
+			keys, err := store.ListKeys()
 			if err != nil {
 				fmt.Printf("(error) \\keys: %s", err)
 				continue
 			}
-			output = "[" + strings.Join(op, ",") + "]"
+			stringKeys := make([]string, len(keys))
+			for i, key := range keys {
+				stringKeys[i] = string(key)
+			}
+			output = "[" + strings.Join(stringKeys, ",") + "]"
 		case "\\size":
 			output = fmt.Sprintf("%d", store.Size())
 		default:

@@ -91,7 +91,7 @@ func (w *Writer) WriteKeyValue(key []byte, value []byte) (int64, error) {
 // This function returns the offset of the record in the file, measured from the start of the file
 func (w *Writer) WriteTombstone(key []byte) (int64, error) {
 	start := w.currentPos
-	rec := newRecord(key, nil, recordTypeDelete)
+	rec := newRecord(key, nil, RecordTypeDelete)
 	return start, w.writeRecord(rec)
 }
 

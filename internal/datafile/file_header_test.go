@@ -12,7 +12,7 @@ import (
 func TestWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
 	ts := time.Now()
-	header := NewFileHeader(ts, fileHeaderSize)
+	header := NewFileHeader(ts, 0)
 
 	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
 		t.Fatalf("failed to write header: %v", err)
@@ -28,8 +28,8 @@ func TestWriteFileHeader(t *testing.T) {
 	}
 
 	// Check size
-	if len(fileContents) != fileHeaderSize {
-		t.Errorf("expected header to be of size %d, got %d", fileHeaderSize, len(fileContents))
+	if len(fileContents) != FileHeaderSize {
+		t.Errorf("expected header to be of size %d, got %d", FileHeaderSize, len(fileContents))
 	}
 
 	// Check if the header was written correctly
@@ -44,7 +44,7 @@ func TestReadWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
 
 	ts := time.Now()
-	header := NewFileHeader(ts, fileHeaderSize)
+	header := NewFileHeader(ts, 0)
 
 	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
 		t.Fatalf("failed to write header: %v", err)
