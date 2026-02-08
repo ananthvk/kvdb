@@ -15,7 +15,7 @@ import (
 type Reader struct {
 	fs         afero.Fs
 	file       afero.File
-	baseOffset uint32
+	baseOffset int64
 	// Temporary fixed sized buffer to read the record header into
 	buf [20]byte
 }
@@ -24,7 +24,7 @@ type Reader struct {
 //
 // baseOffset is the offset (in bytes) from the start of the file, that points to the first byte of the first log record. It is used
 // to skip header fields and other metadata present at the start of the file.
-func NewReader(fs afero.Fs, path string, baseOffset uint32) (*Reader, error) {
+func NewReader(fs afero.Fs, path string, baseOffset int64) (*Reader, error) {
 	file, err := fs.OpenFile(path, os.O_RDONLY, 0666)
 	if err != nil {
 		return nil, err
@@ -38,8 +38,8 @@ func NewReader(fs afero.Fs, path string, baseOffset uint32) (*Reader, error) {
 
 // ReadValueAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the value in the returned record. Key is left empty.
-func (r *Reader) ReadValueAt(offset uint32) (*Record, error) {
-	if _, err := r.file.Seek(int64(offset)+int64(r.baseOffset), io.SeekStart); err != nil {
+func (r *Reader) ReadValueAt(offset int64) (*Record, error) {
+	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -49,7 +49,7 @@ func (r *Reader) ReadValueAt(offset uint32) (*Record, error) {
 	record := &Record{
 		Header: *header,
 		Value:  make([]byte, header.ValueSize),
-		Size:   recordHeaderSize + header.KeySize + header.ValueSize + 4,
+		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 	// Seek to skip over the key
 	if _, err := r.file.Seek(int64(header.KeySize), io.SeekCurrent); err != nil {
@@ -63,8 +63,8 @@ func (r *Reader) ReadValueAt(offset uint32) (*Record, error) {
 
 // ReadKeyAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the key in the returned record. Value is left empty.
-func (r *Reader) ReadKeyAt(offset uint32) (*Record, error) {
-	if _, err := r.file.Seek(int64(offset)+int64(r.baseOffset), io.SeekStart); err != nil {
+func (r *Reader) ReadKeyAt(offset int64) (*Record, error) {
+	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -74,7 +74,7 @@ func (r *Reader) ReadKeyAt(offset uint32) (*Record, error) {
 	record := &Record{
 		Header: *header,
 		Key:    make([]byte, header.KeySize),
-		Size:   recordHeaderSize + header.KeySize + header.ValueSize + 4,
+		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 	if _, err := io.ReadFull(r.file, record.Key); err != nil {
 		return nil, err
@@ -84,8 +84,8 @@ func (r *Reader) ReadKeyAt(offset uint32) (*Record, error) {
 
 // ReadRecordAt reads a record at the given offset (from the start of the first record).
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
-func (r *Reader) ReadRecordAt(offset uint32) (*Record, error) {
-	if _, err := r.file.Seek(int64(offset)+int64(r.baseOffset), io.SeekStart); err != nil {
+func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
+	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -96,7 +96,7 @@ func (r *Reader) ReadRecordAt(offset uint32) (*Record, error) {
 		Header: *header,
 		Key:    make([]byte, header.KeySize),
 		Value:  make([]byte, header.ValueSize),
-		Size:   recordHeaderSize + header.KeySize + header.ValueSize + 4,
+		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
 	if _, err := io.ReadFull(r.file, record.Key); err != nil {
@@ -111,8 +111,8 @@ func (r *Reader) ReadRecordAt(offset uint32) (*Record, error) {
 // ReadRecordAtStrict reads a record at the given offset (from the start of the first record).
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
 // It also verifies if the record is valid by computing the CRC checksum
-func (r *Reader) ReadRecordAtStrict(offset uint32) (*Record, error) {
-	if _, err := r.file.Seek(int64(offset)+int64(r.baseOffset), io.SeekStart); err != nil {
+func (r *Reader) ReadRecordAtStrict(offset int64) (*Record, error) {
+	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
 		return nil, err
 	}
 
@@ -134,7 +134,7 @@ func (r *Reader) ReadRecordAtStrict(offset uint32) (*Record, error) {
 		Header: *header,
 		Key:    make([]byte, header.KeySize),
 		Value:  make([]byte, header.ValueSize),
-		Size:   recordHeaderSize + header.KeySize + header.ValueSize + 4,
+		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
 	if _, err := io.ReadFull(r.file, record.Key); err != nil {

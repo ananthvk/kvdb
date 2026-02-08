@@ -3,6 +3,7 @@ package record
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"io"
 	"os"
 
 	"github.com/spf13/afero"
@@ -14,7 +15,8 @@ type Writer struct {
 	fs   afero.Fs
 	file afero.File
 	// Internal buffer used to temporarily hold record header
-	buf [recordHeaderSize]byte
+	buf        [recordHeaderSize]byte
+	currentPos int64
 }
 
 // NewWriter creates a new Record Writer that opens a file at the specified path for appending logs
@@ -23,9 +25,18 @@ func NewWriter(fs afero.Fs, path string) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Seek to end to find the size of the file (position for the next record)
+	pos, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+
 	return &Writer{
-		fs:   fs,
-		file: file,
+		fs:         fs,
+		file:       file,
+		currentPos: pos,
 	}, nil
 }
 
@@ -62,21 +73,26 @@ func (w *Writer) writeRecord(r *Record) error {
 	if err := binary.Write(w.file, binary.LittleEndian, crc); err != nil {
 		return err
 	}
+	w.currentPos += int64(r.Size)
 	return nil
 }
 
 // WriteKeyValue writes the key-value pair as a new log entry to the file. It does not call sync(), so there
-// is a chance that data might get lost if the system crashes. If you need durability, call Sync() after writing
-func (w *Writer) WriteKeyValue(key []byte, value []byte) error {
+// is a chance that data might get lost if the system crashes. If you need durability, call Sync() after writing.
+// This function returns the offset of the record in the file, measured from the start of the file
+func (w *Writer) WriteKeyValue(key []byte, value []byte) (int64, error) {
+	start := w.currentPos
 	rec := newRecord(key, value, recordTypePut)
-	return w.writeRecord(rec)
+	return start, w.writeRecord(rec)
 }
 
 // WriteTombstone writes a tombstone value for the specified key, this function is to be used
 // to delete a key from the store.
-func (w *Writer) WriteTombstone(key []byte) error {
+// This function returns the offset of the record in the file, measured from the start of the file
+func (w *Writer) WriteTombstone(key []byte) (int64, error) {
+	start := w.currentPos
 	rec := newRecord(key, nil, recordTypeDelete)
-	return w.writeRecord(rec)
+	return start, w.writeRecord(rec)
 }
 
 // Sync flushes any buffered data to the underlying file. It calls sync() on the file

@@ -30,7 +30,7 @@ type Record struct {
 	Header Header
 	Key    []byte
 	Value  []byte
-	Size   uint32
+	Size   int64
 }
 
 // newRecord returns a Record given the key, value and record type. The time of creation, key size and value size are set when this
@@ -46,6 +46,6 @@ func newRecord(key []byte, value []byte, recordType uint8) *Record {
 		},
 		Key:   key,
 		Value: value,
-		Size:  recordHeaderSize + uint32(len(key)) + uint32(len(value)) + 4, // 4 for the CRC32
+		Size:  recordHeaderSize + int64(len(key)) + int64(len(value)) + 4, // 4 for the CRC32
 	}
 }
