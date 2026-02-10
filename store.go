@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
+	"github.com/ananthvk/kvdb/internal/keydir"
 	"github.com/ananthvk/kvdb/internal/metafile"
 	"github.com/ananthvk/kvdb/internal/record"
 	"github.com/ananthvk/kvdb/internal/utils"
@@ -20,6 +21,7 @@ type DataStore struct {
 	fs       afero.Fs
 	path     string
 	metaInfo *metafile.MetaData
+	keydir   *keydir.Keydir
 	reader   *record.Reader
 	writer   *record.Writer
 }
@@ -95,6 +97,7 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 		metaInfo: metainfo,
 		reader:   reader,
 		writer:   writer,
+		keydir:   keydir.NewKeydir(),
 	}, nil
 }
 
@@ -136,9 +139,29 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 		return nil, err
 	}
 
+	// Rebuild the keydir
+	keydir := keydir.NewKeydir()
+	var offset int64 = 0
+	for {
+		rec, err := reader.ReadRecordAtStrict(offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		if rec.Header.RecordType == record.RecordTypeDelete {
+			keydir.DeleteRecord(rec.Key)
+		} else {
+			keydir.AddKeydirRecord(rec.Key, 1, rec.Header.ValueSize, offset, rec.Header.Timestamp)
+		}
+		offset += rec.Size
+	}
+
 	return &DataStore{
 		fs:       fs,
 		path:     path,
+		keydir:   keydir,
 		metaInfo: metainfo,
 		reader:   reader,
 		writer:   writer,
@@ -148,40 +171,21 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 // Get returns the value associated with the key. If the key does not exist, `ErrNotFound` is returned, in case of any
 // other errors, the error is returned
 func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
-	var offset int64 = 0
-	var value []byte
-	var valuePresent bool
-	// TODO: It is more efficient to scan the datastore in reverse
-	// Since we can stop at first match
-	for {
-		rec, err := dataStore.reader.ReadRecordAt(offset)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
-		}
-		if len(rec.Key) == len(key) && string(rec.Key) == string(key) {
-			if rec.Header.RecordType == record.RecordTypeDelete {
-				valuePresent = false
-				value = nil
-			} else {
-				value = rec.Value
-				valuePresent = true
-			}
-		}
-		offset += rec.Size
-	}
-	if valuePresent {
-		return value, nil
-	} else {
+	rec, ok := dataStore.keydir.GetKeydirRecord(key)
+	if !ok {
 		return nil, ErrKeyNotFound
 	}
+	record, err := dataStore.reader.ReadValueAt(rec.ValuePos)
+	if err != nil {
+		return nil, err
+	}
+	return record.Value, nil
 }
 
 // Put sets the value for the specified key. It returns an error if the operation was not successful
 func (dataStore *DataStore) Put(key []byte, value []byte) error {
-	_, err := dataStore.writer.WriteKeyValue(key, value)
+	offset, err := dataStore.writer.WriteKeyValue(key, value)
+	dataStore.keydir.AddKeydirRecord(key, 1, uint32(len(value)), offset-datafile.FileHeaderSize, time.Now())
 	return err
 }
 
@@ -189,36 +193,15 @@ func (dataStore *DataStore) Put(key []byte, value []byte) error {
 // An error is returned if the deletion failed due to some other reason.
 func (dataStore *DataStore) Delete(key []byte) error {
 	_, err := dataStore.writer.WriteTombstone(key)
+	dataStore.keydir.DeleteRecord(key)
 	return err
 }
 
 // ListKeys returns a list of all keys in the datastore. Note: This is intended to be
 // used for debug or inspection.
-func (dataStore *DataStore) ListKeys() ([][]byte, error) {
-	keyMap := make(map[string]struct{})
-	var offset int64 = 0
-	for {
-		rec, err := dataStore.reader.ReadKeyAt(offset)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				keys := make([][]byte, 0, len(keyMap))
-				for k := range keyMap {
-					keys = append(keys, []byte(k))
-				}
-				return keys, nil
-			}
-			return nil, err
-		}
-		if rec.Header.RecordType == record.RecordTypeDelete {
-			delete(keyMap, string(rec.Key))
-		} else {
-			keyMap[string(rec.Key)] = struct{}{}
-		}
-		offset += rec.Size
-	}
+func (dataStore *DataStore) ListKeys() ([]string, error) {
+	return dataStore.keydir.GetAllKeys(), nil
 }
-
-// TODO: Implement fold
 
 func (dataStore *DataStore) Merge(directoryPath string) error {
 	// nop
@@ -231,8 +214,7 @@ func (dataStore *DataStore) Sync() error {
 
 // Size returns the number of keys present in the datastore
 func (dataStore *DataStore) Size() int {
-	// TODO: Implement later
-	return 0
+	return dataStore.keydir.Size()
 }
 
 // Close closes the datastore, writes pending changes (if any), and frees resources
