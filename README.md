@@ -44,3 +44,34 @@ Record type
 0x50 ('P') - PUT record
 0x44 ('D') - DELETE (Tombstone), Value Size is set to 0, and no value bytes are present
 ```
+
+## Directory structure
+
+```
+testdb/
+	kvdb_store.meta
+	data/
+		0000000001.dat
+		0000000002.dat
+		...
+```
+
+The file with the largest numerical value is considered the active file when opening the datastore.
+
+The file name is zero padded to length of 10 characters
+
+
+A file `kvdb_store.meta` will indicate that the directory is a valid store, it also holds configuration of the datastore
+
+It follows a simple INI like key=value structure
+
+Example structure
+```
+name = testdb
+version = 1.0.0
+created = 2026-02-10 11:32:00.118157 +0000 UTC
+max_key_size = 128 # In bytes
+max_value_size = 64000 # 64KB
+max_datafile_size = 1000001000 # 100 MB
+```
+These values will only be used for new keys, values and datafiles. Existing data will remain unaffected if the values are changed

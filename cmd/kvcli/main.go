@@ -18,6 +18,7 @@ func main() {
 	}
 	store, err := kvdb.Open(fs, os.Args[1])
 	if err != nil {
+		fmt.Println(err)
 		// Try creating it
 		store, err = kvdb.Create(fs, os.Args[1])
 		if err != nil {

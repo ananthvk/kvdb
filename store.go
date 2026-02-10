@@ -8,24 +8,70 @@ import (
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
+	"github.com/ananthvk/kvdb/internal/metafile"
 	"github.com/ananthvk/kvdb/internal/record"
+	"github.com/ananthvk/kvdb/internal/utils"
 	"github.com/spf13/afero"
 )
 
 // No Keydir for now, just do a linear scan of the entire file
 
 type DataStore struct {
-	fs     afero.Fs
-	path   string
-	reader *record.Reader
-	writer *record.Writer
+	fs       afero.Fs
+	path     string
+	metaInfo *metafile.MetaData
+	reader   *record.Reader
+	writer   *record.Writer
 }
 
-// Create creates a single file datastore at the given path
+const (
+	datastoreType             = "kvdb"            // Type of store
+	version                   = "1.0.0"           // Version of the application
+	default_max_key_size      = 128               // In bytes (128 bytes)
+	default_max_value_size    = 64000             // In bytes (64 KB)
+	default_max_datafile_size = 100 * 1000 * 1000 // In bytes (100 MB)
+)
+
+// Create creates a datastore at the given path, if the path exists and an existing key store
+// is found, it returns an error. If the path is a file, or is a non empty directory, an error
+// is returned. Otherwise, the directory is created (along with all it's parents), and the datastore
+// is initialized
 func Create(fs afero.Fs, path string) (*DataStore, error) {
-	if err := fs.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+	// Check if it's a valid path to create a datastore
+	if valid, reason, err := metafile.IsValidPath(fs, path); err != nil || !valid {
+		if err != nil {
+			return nil, err
+		} else {
+			return nil, errors.New(reason)
+		}
+	}
+
+	if err := fs.MkdirAll((path), os.ModePerm); err != nil {
 		return nil, err
 	}
+
+	metainfo := &metafile.MetaData{
+		Type:            datastoreType,
+		Version:         version,
+		Created:         time.Now().String(),
+		MaxKeySize:      default_max_key_size,
+		MaxValueSize:    default_max_value_size,
+		MaxDatafileSize: default_max_datafile_size,
+	}
+	// Write the metafile
+	if err := metafile.WriteMetaFile(fs, path, metainfo); err != nil {
+		return nil, err
+	}
+
+	// Make the data/ folder
+	if err := fs.Mkdir(filepath.Join(path, "data"), os.ModePerm); err != nil {
+		return nil, err
+	}
+
+	// Write the first file
+	firstFile := utils.GetDataFileName(1)
+
+	path = filepath.Join(path, "data", firstFile)
 
 	// Write the file header
 	err := datafile.WriteFileHeader(fs, path, datafile.NewFileHeader(time.Now(), 0))
@@ -44,22 +90,36 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 	}
 
 	return &DataStore{
-		fs:     fs,
-		path:   path,
-		reader: reader,
-		writer: writer,
+		fs:       fs,
+		path:     path,
+		metaInfo: metainfo,
+		reader:   reader,
+		writer:   writer,
 	}, nil
 }
 
 // Open opens the datastore at the specified location. If the datastore does not exist, an error is returned
 func Open(fs afero.Fs, path string) (*DataStore, error) {
-	exists, err := afero.Exists(fs, path)
+	exists, err := metafile.IsDatastore(fs, path)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return nil, ErrNotExist
 	}
+
+	// Read the metafile
+	metainfo, err := metafile.ReadMetaFile(fs, path)
+	if err != nil {
+		return nil, err
+	}
+	if metainfo.Type != "kvdb" {
+		return nil, errors.New("metafile corrupted, not a kvdb")
+	}
+
+	firstFile := utils.GetDataFileName(1)
+	path = filepath.Join(path, "data", firstFile)
+
 	// Check if it's a datafile
 	header, err := datafile.ReadFileHeader(fs, path)
 	if err != nil {
@@ -77,10 +137,11 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 	}
 
 	return &DataStore{
-		fs:     fs,
-		path:   path,
-		reader: reader,
-		writer: writer,
+		fs:       fs,
+		path:     path,
+		metaInfo: metainfo,
+		reader:   reader,
+		writer:   writer,
 	}, nil
 }
 
@@ -93,14 +154,14 @@ func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
 	// TODO: It is more efficient to scan the datastore in reverse
 	// Since we can stop at first match
 	for {
-		rec, err := dataStore.reader.ReadRecordAtStrict(offset)
+		rec, err := dataStore.reader.ReadRecordAt(offset)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, err
 		}
-		if string(rec.Key) == string(key) {
+		if len(rec.Key) == len(key) && string(rec.Key) == string(key) {
 			if rec.Header.RecordType == record.RecordTypeDelete {
 				valuePresent = false
 				value = nil
