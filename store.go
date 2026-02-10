@@ -2,36 +2,33 @@ package kvdb
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
+	"github.com/ananthvk/kvdb/internal/filemanager"
 	"github.com/ananthvk/kvdb/internal/keydir"
 	"github.com/ananthvk/kvdb/internal/metafile"
-	"github.com/ananthvk/kvdb/internal/record"
-	"github.com/ananthvk/kvdb/internal/utils"
 	"github.com/spf13/afero"
 )
 
 // No Keydir for now, just do a linear scan of the entire file
 
 type DataStore struct {
-	fs       afero.Fs
-	path     string
-	metaInfo *metafile.MetaData
-	keydir   *keydir.Keydir
-	reader   *record.Reader
-	writer   *record.Writer
+	fs          afero.Fs
+	path        string
+	metaInfo    *metafile.MetaData
+	keydir      *keydir.Keydir
+	fileManager *filemanager.FileManager
 }
 
 const (
-	datastoreType             = "kvdb"            // Type of store
-	version                   = "1.0.0"           // Version of the application
-	default_max_key_size      = 128               // In bytes (128 bytes)
-	default_max_value_size    = 64000             // In bytes (64 KB)
-	default_max_datafile_size = 100 * 1000 * 1000 // In bytes (100 MB)
+	datastoreType          = "kvdb"  // Type of store
+	version                = "1.0.0" // Version of the application
+	defaultMaxKeySize      = 128     // In bytes (128 bytes)
+	defaultMaxValueSize    = 64000   // In bytes (64 KB)
+	defaultMaxDatafileSize = 50      // In bytes (50 bytes for testing)
 )
 
 // Create creates a datastore at the given path, if the path exists and an existing key store
@@ -56,9 +53,9 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 		Type:            datastoreType,
 		Version:         version,
 		Created:         time.Now().String(),
-		MaxKeySize:      default_max_key_size,
-		MaxValueSize:    default_max_value_size,
-		MaxDatafileSize: default_max_datafile_size,
+		MaxKeySize:      defaultMaxKeySize,
+		MaxValueSize:    defaultMaxValueSize,
+		MaxDatafileSize: defaultMaxDatafileSize,
 	}
 	// Write the metafile
 	if err := metafile.WriteMetaFile(fs, path, metainfo); err != nil {
@@ -69,35 +66,16 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 	if err := fs.Mkdir(filepath.Join(path, "data"), os.ModePerm); err != nil {
 		return nil, err
 	}
-
-	// Write the first file
-	firstFile := utils.GetDataFileName(1)
-
-	path = filepath.Join(path, "data", firstFile)
-
-	// Write the file header
-	err := datafile.WriteFileHeader(fs, path, datafile.NewFileHeader(time.Now(), 0))
+	fm, err := filemanager.NewFileManager(fs, path, defaultMaxDatafileSize)
 	if err != nil {
 		return nil, err
 	}
-
-	reader, err := record.NewReader(fs, path, datafile.FileHeaderSize)
-	if err != nil {
-		return nil, err
-	}
-
-	writer, err := record.NewWriter(fs, path)
-	if err != nil {
-		return nil, err
-	}
-
 	return &DataStore{
-		fs:       fs,
-		path:     path,
-		metaInfo: metainfo,
-		reader:   reader,
-		writer:   writer,
-		keydir:   keydir.NewKeydir(),
+		fs:          fs,
+		path:        path,
+		metaInfo:    metainfo,
+		keydir:      keydir.NewKeydir(),
+		fileManager: fm,
 	}, nil
 }
 
@@ -120,51 +98,20 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 		return nil, errors.New("metafile corrupted, not a kvdb")
 	}
 
-	firstFile := utils.GetDataFileName(1)
-	path = filepath.Join(path, "data", firstFile)
-
-	// Check if it's a datafile
-	header, err := datafile.ReadFileHeader(fs, path)
+	fm, err := filemanager.NewFileManager(fs, path, defaultMaxDatafileSize)
 	if err != nil {
 		return nil, err
 	}
-
-	reader, err := record.NewReader(fs, path, int64(header.Offset))
+	kd, err := fm.ReadKeydir()
 	if err != nil {
 		return nil, err
 	}
-
-	writer, err := record.NewWriter(fs, path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Rebuild the keydir
-	keydir := keydir.NewKeydir()
-	var offset int64 = 0
-	for {
-		rec, err := reader.ReadRecordAtStrict(offset)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
-		}
-		if rec.Header.RecordType == record.RecordTypeDelete {
-			keydir.DeleteRecord(rec.Key)
-		} else {
-			keydir.AddKeydirRecord(rec.Key, 1, rec.Header.ValueSize, offset, rec.Header.Timestamp)
-		}
-		offset += rec.Size
-	}
-
 	return &DataStore{
-		fs:       fs,
-		path:     path,
-		keydir:   keydir,
-		metaInfo: metainfo,
-		reader:   reader,
-		writer:   writer,
+		fs:          fs,
+		path:        path,
+		keydir:      kd,
+		metaInfo:    metainfo,
+		fileManager: fm,
 	}, nil
 }
 
@@ -175,7 +122,7 @@ func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
 	if !ok {
 		return nil, ErrKeyNotFound
 	}
-	record, err := dataStore.reader.ReadValueAt(rec.ValuePos)
+	record, err := dataStore.fileManager.ReadValueAt(rec.FileId, rec.ValuePos)
 	if err != nil {
 		return nil, err
 	}
@@ -184,15 +131,15 @@ func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
 
 // Put sets the value for the specified key. It returns an error if the operation was not successful
 func (dataStore *DataStore) Put(key []byte, value []byte) error {
-	offset, err := dataStore.writer.WriteKeyValue(key, value)
-	dataStore.keydir.AddKeydirRecord(key, 1, uint32(len(value)), offset-datafile.FileHeaderSize, time.Now())
+	fileId, offset, err := dataStore.fileManager.Write(key, value, false)
+	dataStore.keydir.AddKeydirRecord(key, fileId, uint32(len(value)), offset-datafile.FileHeaderSize, time.Now())
 	return err
 }
 
 // Delete deletes the value associated with the specified key. No error will be returned if the key does not exist.
 // An error is returned if the deletion failed due to some other reason.
 func (dataStore *DataStore) Delete(key []byte) error {
-	_, err := dataStore.writer.WriteTombstone(key)
+	_, _, err := dataStore.fileManager.Write(key, nil, true)
 	dataStore.keydir.DeleteRecord(key)
 	return err
 }
@@ -209,7 +156,7 @@ func (dataStore *DataStore) Merge(directoryPath string) error {
 }
 
 func (dataStore *DataStore) Sync() error {
-	return dataStore.writer.Sync()
+	return dataStore.fileManager.Sync()
 }
 
 // Size returns the number of keys present in the datastore
@@ -219,16 +166,12 @@ func (dataStore *DataStore) Size() int {
 
 // Close closes the datastore, writes pending changes (if any), and frees resources
 func (dataStore *DataStore) Close() error {
-	if err := dataStore.writer.Sync(); err != nil {
+	if err := dataStore.fileManager.Sync(); err != nil {
 		return err
 	}
-	err1 := dataStore.writer.Close()
-	err2 := dataStore.reader.Close()
+	err1 := dataStore.fileManager.Close()
 	if err1 != nil {
 		return err1
-	}
-	if err2 != nil {
-		return err2
 	}
 	return nil
 }
