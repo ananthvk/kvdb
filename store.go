@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
@@ -13,14 +14,13 @@ import (
 	"github.com/spf13/afero"
 )
 
-// No Keydir for now, just do a linear scan of the entire file
-
 type DataStore struct {
 	fs          afero.Fs
 	path        string
 	metaInfo    *metafile.MetaData
 	keydir      *keydir.Keydir
 	fileManager *filemanager.FileManager
+	mu          sync.RWMutex
 }
 
 const (
@@ -118,6 +118,8 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 // Get returns the value associated with the key. If the key does not exist, `ErrNotFound` is returned, in case of any
 // other errors, the error is returned
 func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
+	dataStore.mu.RLock()
+	defer dataStore.mu.RUnlock()
 	rec, ok := dataStore.keydir.GetKeydirRecord(key)
 	if !ok {
 		return nil, ErrKeyNotFound
@@ -131,7 +133,12 @@ func (dataStore *DataStore) Get(key []byte) ([]byte, error) {
 
 // Put sets the value for the specified key. It returns an error if the operation was not successful
 func (dataStore *DataStore) Put(key []byte, value []byte) error {
+	dataStore.mu.Lock()
+	defer dataStore.mu.Unlock()
 	fileId, offset, err := dataStore.fileManager.Write(key, value, false)
+	if err != nil {
+		return err
+	}
 	dataStore.keydir.AddKeydirRecord(key, fileId, uint32(len(value)), offset-datafile.FileHeaderSize, time.Now())
 	return err
 }
@@ -139,7 +146,12 @@ func (dataStore *DataStore) Put(key []byte, value []byte) error {
 // Delete deletes the value associated with the specified key. No error will be returned if the key does not exist.
 // An error is returned if the deletion failed due to some other reason.
 func (dataStore *DataStore) Delete(key []byte) error {
+	dataStore.mu.Lock()
+	defer dataStore.mu.Unlock()
 	_, _, err := dataStore.fileManager.Write(key, nil, true)
+	if err != nil {
+		return err
+	}
 	dataStore.keydir.DeleteRecord(key)
 	return err
 }
@@ -147,6 +159,8 @@ func (dataStore *DataStore) Delete(key []byte) error {
 // ListKeys returns a list of all keys in the datastore. Note: This is intended to be
 // used for debug or inspection.
 func (dataStore *DataStore) ListKeys() ([]string, error) {
+	dataStore.mu.RLock()
+	defer dataStore.mu.RUnlock()
 	return dataStore.keydir.GetAllKeys(), nil
 }
 
@@ -156,16 +170,22 @@ func (dataStore *DataStore) Merge(directoryPath string) error {
 }
 
 func (dataStore *DataStore) Sync() error {
+	dataStore.mu.Lock()
+	defer dataStore.mu.Unlock()
 	return dataStore.fileManager.Sync()
 }
 
 // Size returns the number of keys present in the datastore
 func (dataStore *DataStore) Size() int {
+	dataStore.mu.RLock()
+	defer dataStore.mu.RUnlock()
 	return dataStore.keydir.Size()
 }
 
 // Close closes the datastore, writes pending changes (if any), and frees resources
 func (dataStore *DataStore) Close() error {
+	dataStore.mu.Lock()
+	defer dataStore.mu.Unlock()
 	if err := dataStore.fileManager.Sync(); err != nil {
 		return err
 	}
