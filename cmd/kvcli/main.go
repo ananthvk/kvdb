@@ -56,6 +56,9 @@ func main() {
 			output = "[" + strings.Join(stringKeys, ",") + "]"
 		case "\\size":
 			output = fmt.Sprintf("%d", store.Size())
+		case "\\sync":
+			store.Sync()
+			output = "OK"
 		default:
 			if after, ok := strings.CutPrefix(query, "\\delete "); ok {
 				key := after

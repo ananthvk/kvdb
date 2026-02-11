@@ -24,11 +24,11 @@ type DataStore struct {
 }
 
 const (
-	datastoreType          = "kvdb"  // Type of store
-	version                = "1.0.0" // Version of the application
-	defaultMaxKeySize      = 128     // In bytes (128 bytes)
-	defaultMaxValueSize    = 64000   // In bytes (64 KB)
-	defaultMaxDatafileSize = 50      // In bytes (50 bytes for testing)
+	datastoreType          = "kvdb"          // Type of store
+	version                = "1.0.0"         // Version of the application
+	defaultMaxKeySize      = 128             // In bytes (128 bytes)
+	defaultMaxValueSize    = 64000           // In bytes (64 KB)
+	defaultMaxDatafileSize = 5 * 1000 * 1000 // In bytes (5 MB for testing)
 )
 
 // Create creates a datastore at the given path, if the path exists and an existing key store
@@ -98,7 +98,7 @@ func Open(fs afero.Fs, path string) (*DataStore, error) {
 		return nil, errors.New("metafile corrupted, not a kvdb")
 	}
 
-	fm, err := filemanager.NewFileManager(fs, path, defaultMaxDatafileSize)
+	fm, err := filemanager.NewFileManager(fs, path, metainfo.MaxDatafileSize)
 	if err != nil {
 		return nil, err
 	}
