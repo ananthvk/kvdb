@@ -7,39 +7,36 @@ import (
 	"os"
 	"time"
 
+	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/spf13/afero"
 )
 
 // Reader is responsible for reading log records from a file. There are no locks in this implementation, so it's
 // unsafe to call Reader methods concurrently
 type Reader struct {
-	fs         afero.Fs
-	file       afero.File
-	baseOffset int64
+	fs   afero.Fs
+	file afero.File
 	// Temporary fixed sized buffer to read the record header into
 	buf [20]byte
 }
 
 // NewReader creates a new Record Reader that opens a file at the specified path for reading log records.
-//
-// baseOffset is the offset (in bytes) from the start of the file, that points to the first byte of the first log record. It is used
-// to skip header fields and other metadata present at the start of the file.
-func NewReader(fs afero.Fs, path string, baseOffset int64) (*Reader, error) {
+// It starts reading from the 19th byte in the file (To skip the header)
+func NewReader(fs afero.Fs, path string) (*Reader, error) {
 	file, err := fs.OpenFile(path, os.O_RDONLY, 0666)
 	if err != nil {
 		return nil, err
 	}
 	return &Reader{
-		fs:         fs,
-		file:       file,
-		baseOffset: baseOffset,
+		fs:   fs,
+		file: file,
 	}, nil
 }
 
 // ReadValueAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the value in the returned record. Key is left empty.
 func (r *Reader) ReadValueAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
+	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -64,7 +61,7 @@ func (r *Reader) ReadValueAt(offset int64) (*Record, error) {
 // ReadKeyAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the key in the returned record. Value is left empty.
 func (r *Reader) ReadKeyAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
+	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -85,7 +82,7 @@ func (r *Reader) ReadKeyAt(offset int64) (*Record, error) {
 // ReadRecordAt reads a record at the given offset (from the start of the first record).
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
 func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
+	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
 		return nil, err
 	}
 	header, err := r.readHeader()
@@ -112,7 +109,7 @@ func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
 // It also verifies if the record is valid by computing the CRC checksum
 func (r *Reader) ReadRecordAtStrict(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+r.baseOffset, io.SeekStart); err != nil {
+	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
 		return nil, err
 	}
 

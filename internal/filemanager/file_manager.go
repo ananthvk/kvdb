@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +48,6 @@ func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager
 			}
 
 			maxDatafileNumber = max(maxDatafileNumber, int(i))
-			fmt.Println("Found datafile", i)
 		}
 	}
 
@@ -56,7 +56,7 @@ func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager
 		maxDatafileNumber = 1
 		dataFileName := utils.GetDataFileName(maxDatafileNumber)
 		// Write the file header
-		err := datafile.WriteFileHeader(fs, filepath.Join(dataDirPath, dataFileName), datafile.NewFileHeader(time.Now(), 0))
+		err := datafile.WriteFileHeader(fs, filepath.Join(dataDirPath, dataFileName), time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -87,9 +87,7 @@ func (f *FileManager) Write(key []byte, value []byte, isTombstone bool) (int, in
 		dataFileName := utils.GetDataFileName(f.nextDataFileNumber)
 		// Write the file header
 		err := datafile.WriteFileHeader(f.fs,
-			filepath.Join(f.dataStoreRootPath, "data", dataFileName),
-			datafile.NewFileHeader(time.Now(), 0),
-		)
+			filepath.Join(f.dataStoreRootPath, "data", dataFileName), time.Now())
 		if err != nil {
 			return 0, 0, err
 		}
@@ -133,7 +131,7 @@ func (f *FileManager) ReadRecordAtStrict(fileId int, offset int64) (*record.Reco
 	}
 
 	dataFileName := utils.GetDataFileName(fileId)
-	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName), datafile.FileHeaderSize)
+	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +147,7 @@ func (f *FileManager) ReadValueAt(fileId int, offset int64) (*record.Record, err
 		return reader.ReadValueAt(offset)
 	}
 	dataFileName := utils.GetDataFileName(fileId)
-	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName), datafile.FileHeaderSize)
+	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +163,16 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir() || entries[j].IsDir() {
+			return false
+		}
+		nameI := strings.TrimSuffix(entries[i].Name(), filepath.Ext(entries[i].Name()))
+		nameJ := strings.TrimSuffix(entries[j].Name(), filepath.Ext(entries[j].Name()))
+		numI, _ := strconv.Atoi(nameI)
+		numJ, _ := strconv.Atoi(nameJ)
+		return numI < numJ
+	})
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			filename := entry.Name()
@@ -182,11 +190,13 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 				continue
 			}
 
-			reader, err := record.NewReader(f.fs, datafilePath, datafile.FileHeaderSize)
+			reader, err := record.NewReader(f.fs, datafilePath)
 			if err != nil {
 				fmt.Printf("build keydir, skip %s, error: %s\n", filename, err)
 				continue
 			}
+
+			fmt.Println("Load datafile", entry.Name())
 			err = f.addRecordsToKeydir(kd, int(fileId), reader)
 			if err != nil {
 				fmt.Printf("build keydir, %s error: %s\n", filename, err)

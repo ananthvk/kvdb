@@ -11,13 +11,13 @@ import (
 	"github.com/spf13/afero"
 )
 
-const fileHeaderVersionMajor = 1
+const fileHeaderVersionMajor = 2
 const fileHeaderVersionMinor = 0
 const fileHeaderVersionPatch = 0
 
 var fileHeaderMagicBytes = [...]byte{0x00, 0x6B, 0x76, 0x64, 0x62, 0x44, 0x41, 0x54}
 
-const FileHeaderSize = 24 // In bytes
+const FileHeaderSize = 19 // In bytes
 
 var (
 	ErrNotDataFile                  = errors.New("not a kvdb data file")
@@ -29,19 +29,15 @@ type FileHeader struct {
 	VersionMinor byte
 	VersionPatch byte
 	Timestamp    time.Time
-	Offset       uint32
 }
 
-// NewFileHeader creates a new file header, only timestamp and gap needs to be passed
-// gap is the number of bytes between the end of the header and start of records
-// it can be used to store extra data as needed
-func NewFileHeader(ts time.Time, gap uint32) *FileHeader {
+// NewFileHeader creates a new file header
+func NewFileHeader(ts time.Time) *FileHeader {
 	return &FileHeader{
 		VersionMajor: fileHeaderVersionMajor,
 		VersionMinor: fileHeaderVersionMinor,
 		VersionPatch: fileHeaderVersionPatch,
 		Timestamp:    ts,
-		Offset:       FileHeaderSize + gap,
 	}
 }
 
@@ -98,27 +94,24 @@ func ReadFileHeader(fs afero.Fs, path string) (*FileHeader, error) {
 		return nil, err
 	}
 
-	// Read timestamp and offset
+	// Read timestamp
 	ts := int64(binary.LittleEndian.Uint64(buf[11:]))
-	offset := binary.LittleEndian.Uint32(buf[19:])
 	fileHeader.Timestamp = time.UnixMicro(ts)
-	fileHeader.Offset = offset
 
 	return fileHeader, nil
 }
 
 // WriteFileHeader writes the data file header to the file at the given path. Note: It's assumed that the file pointer is at position 0 so that the header
 // can be written first. It also calls `file.Sync()` after writing the header to ensure that the header was written completely.
-// Only `Offset` and `Timestamp` are read from the passed struct, version fields are ignored, and are instead considered
-// from the hardcoded constants. If the file already exists, it results in an error
-func WriteFileHeader(fs afero.Fs, path string, fileHeader *FileHeader) error {
+// If the file already exists, it results in an error
+func WriteFileHeader(fs afero.Fs, path string, ts time.Time) error {
 	file, err := fs.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, os.ModePerm)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	var buf [24]byte
+	var buf [FileHeaderSize]byte
 
 	// Copy magic bytes into buf
 	copy(buf[:], fileHeaderMagicBytes[:])
@@ -127,8 +120,7 @@ func WriteFileHeader(fs afero.Fs, path string, fileHeader *FileHeader) error {
 	buf[9] = fileHeaderVersionMinor
 	buf[10] = fileHeaderVersionPatch
 
-	binary.LittleEndian.PutUint64(buf[11:], uint64(fileHeader.Timestamp.UnixMicro()))
-	binary.LittleEndian.PutUint32(buf[19:], fileHeader.Offset)
+	binary.LittleEndian.PutUint64(buf[11:], uint64(ts.UnixMicro()))
 
 	if _, err := file.Write(buf[:]); err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 )
@@ -16,13 +17,16 @@ type kv struct {
 
 type readerFn func(offset int64) (*Record, error)
 
-func createTestFile(t *testing.T, fs afero.Fs, initialFileData []byte, keyValuePairs []kv) string {
+func createTestFile(t *testing.T, fs afero.Fs, keyValuePairs []kv) string {
 	t.Helper()
 	fileName := uuid.NewString()
 	f, err := fs.Create(fileName)
 	if err != nil {
 		t.Fatalf("could not open file %s", fileName)
 	}
+
+	// Just write FileHeaderSize bytes data at the start
+	initialFileData := make([]byte, datafile.FileHeaderSize)
 	if _, err := f.Write(initialFileData); err != nil {
 		t.Fatalf("could not write initial data to test file %s", fileName)
 	}
@@ -66,9 +70,8 @@ var testData = []kv{
 
 func TestReaderEmptyFile(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("")
-	fileName := createTestFile(t, testFS, initialData, nil)
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	fileName := createTestFile(t, testFS, nil)
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader %s", err)
 	}
@@ -77,10 +80,8 @@ func TestReaderEmptyFile(t *testing.T) {
 	}
 	reader.Close()
 
-	// Same test, but with random bytes at the start of the file (to simulate file header, but no content)
-	initialData = []byte("xthisisaheaderthatisatthestartofthefile")
-	fileName = createTestFile(t, testFS, initialData, nil)
-	reader, err = NewReader(testFS, fileName, int64(len(initialData)))
+	fileName = createTestFile(t, testFS, nil)
+	reader, err = NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader %s", err)
 	}
@@ -95,8 +96,7 @@ func TestReaderEmptyFile(t *testing.T) {
 
 func TestReaderSingleRecord(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData,
+	fileName := createTestFile(t, testFS,
 		[]kv{
 			{
 				key:   []byte("hello world"),
@@ -104,7 +104,7 @@ func TestReaderSingleRecord(t *testing.T) {
 			},
 		},
 	)
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader %s", err)
 	}
@@ -128,9 +128,8 @@ func TestReaderSingleRecord(t *testing.T) {
 
 func TestReaderMultipleRecords(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData, testData)
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	fileName := createTestFile(t, testFS, testData)
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader %s", err)
 	}
@@ -157,9 +156,8 @@ func TestReaderMultipleRecords(t *testing.T) {
 
 func TestReaderKeyAndValueMethods(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData, testData)
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	fileName := createTestFile(t, testFS, testData)
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader %s", err)
 	}
@@ -205,8 +203,7 @@ func TestReaderKeyAndValueMethods(t *testing.T) {
 
 func TestReaderCorruptedData(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData, testData)
+	fileName := createTestFile(t, testFS, testData)
 
 	// Read the file and corrupt some bytes
 	f, err := testFS.OpenFile(fileName, 0x0002, 0666) // os.O_WRONLY
@@ -218,7 +215,7 @@ func TestReaderCorruptedData(t *testing.T) {
 	// Corrupt the checksum of the first record (last 4 bytes)
 	// First record header is 20 bytes, then key and value, then 4-byte checksum
 	firstRecordSize := int64(20) + int64(len(testData[0].key)) + int64(len(testData[0].value))
-	if _, err := f.Seek(int64(len(initialData))+int64(firstRecordSize), 0); err != nil {
+	if _, err := f.Seek(int64(datafile.FileHeaderSize)+int64(firstRecordSize), 0); err != nil {
 		t.Fatalf("could not seek to checksum position: %v", err)
 	}
 	if _, err := f.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF}); err != nil {
@@ -226,7 +223,7 @@ func TestReaderCorruptedData(t *testing.T) {
 	}
 	f.Close()
 
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader: %v", err)
 	}
@@ -249,8 +246,7 @@ func TestReaderCorruptedData(t *testing.T) {
 
 func TestReaderCorruptedKeyData(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData, testData)
+	fileName := createTestFile(t, testFS, testData)
 
 	// Read the file and corrupt key bytes of the second record
 	f, err := testFS.OpenFile(fileName, os.O_RDWR, 0666)
@@ -261,7 +257,7 @@ func TestReaderCorruptedKeyData(t *testing.T) {
 
 	// Calculate offset to second record's key data
 	firstRecordSize := int64(20) + int64(len(testData[0].key)) + int64(len(testData[0].value)) + 4
-	secondRecordKeyOffset := int64(len(initialData)) + int64(firstRecordSize) + 20 // skip header
+	secondRecordKeyOffset := int64(datafile.FileHeaderSize) + int64(firstRecordSize) + 20 // skip header
 
 	if _, err := f.Seek(secondRecordKeyOffset, 0); err != nil {
 		t.Fatalf("could not seek to key position: %v", err)
@@ -271,7 +267,7 @@ func TestReaderCorruptedKeyData(t *testing.T) {
 	}
 	f.Close()
 
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader: %v", err)
 	}
@@ -292,10 +288,9 @@ func TestReaderCorruptedKeyData(t *testing.T) {
 
 func TestReaderMissingData(t *testing.T) {
 	testFS := afero.NewMemMapFs()
-	initialData := []byte("somerandominitialdata010101")
-	fileName := createTestFile(t, testFS, initialData, testData)
+	fileName := createTestFile(t, testFS, testData)
 
-	reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+	reader, err := NewReader(testFS, fileName)
 	if err != nil {
 		t.Fatalf("error creating reader: %v", err)
 	}
@@ -306,11 +301,11 @@ func TestReaderMissingData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not open file for truncation: %v", err)
 	}
-	headerTruncatePos := int64(len(initialData)) + 10 // middle of first record header
+	headerTruncatePos := int64(datafile.FileHeaderSize) + 10 // middle of first record header
 	f.Truncate(headerTruncatePos)
 	f.Close()
 
-	reader, _ = NewReader(testFS, fileName, int64(len(initialData)))
+	reader, _ = NewReader(testFS, fileName)
 	defer reader.Close()
 
 	fns := []readerFn{reader.ReadRecordAtStrict, reader.ReadRecordAt, reader.ReadKeyAt, reader.ReadValueAt}
@@ -321,16 +316,16 @@ func TestReaderMissingData(t *testing.T) {
 	}
 
 	// Test 2: Truncate in the middle of key section
-	fileName = createTestFile(t, testFS, initialData, testData)
+	fileName = createTestFile(t, testFS, testData)
 	f, err = testFS.OpenFile(fileName, os.O_RDWR, 0666)
 	if err != nil {
 		t.Fatalf("could not open file for truncation: %v", err)
 	}
-	keyTruncatePos := int64(len(initialData)) + 20 + int64(len(testData[0].key))/2 // middle of first record key
+	keyTruncatePos := int64(datafile.FileHeaderSize) + 20 + int64(len(testData[0].key))/2 // middle of first record key
 	f.Truncate(keyTruncatePos)
 	f.Close()
 
-	reader, _ = NewReader(testFS, fileName, int64(len(initialData)))
+	reader, _ = NewReader(testFS, fileName)
 	defer reader.Close()
 
 	for _, fn := range fns {
@@ -340,16 +335,16 @@ func TestReaderMissingData(t *testing.T) {
 	}
 
 	// Test 3: Truncate in the middle of value section
-	fileName = createTestFile(t, testFS, initialData, testData)
+	fileName = createTestFile(t, testFS, testData)
 	f, err = testFS.OpenFile(fileName, os.O_RDWR, 0666)
 	if err != nil {
 		t.Fatalf("could not open file for truncation: %v", err)
 	}
-	valueTruncatePos := int64(len(initialData)) + 20 + int64(len(testData[0].key)) + int64(len(testData[0].value))/2 // middle of first record value
+	valueTruncatePos := int64(datafile.FileHeaderSize) + 20 + int64(len(testData[0].key)) + int64(len(testData[0].value))/2 // middle of first record value
 	f.Truncate(valueTruncatePos)
 	f.Close()
 
-	reader, _ = NewReader(testFS, fileName, int64(len(initialData)))
+	reader, _ = NewReader(testFS, fileName)
 	defer reader.Close()
 
 	for _, fn := range fns {
@@ -426,7 +421,7 @@ func TestReaderMissingDataRandomPositions(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fileName := createTestFile(t, testFS, initialData, testData)
+			fileName := createTestFile(t, testFS, testData)
 			truncatePos := tc.truncateOffset(len(initialData), tc.recordIndex, testData)
 
 			f, err := testFS.OpenFile(fileName, os.O_RDWR, 0666)
@@ -436,7 +431,7 @@ func TestReaderMissingDataRandomPositions(t *testing.T) {
 			f.Truncate(truncatePos)
 			f.Close()
 
-			reader, err := NewReader(testFS, fileName, int64(len(initialData)))
+			reader, err := NewReader(testFS, fileName)
 			if err != nil {
 				t.Fatalf("error creating reader: %v", err)
 			}

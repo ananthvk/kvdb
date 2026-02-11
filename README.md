@@ -14,10 +14,8 @@ All integer values are stored in Little Endian format
 | Version minor | 9      | 1            | uint8_t                                   | Minor version of the file format                                                                                                                                    |
 | Version patch | 10     | 1            | uint8_t                                   | Patch version of the file format                                                                                                                                    |
 | Timestamp     | 11     | 8            | int64_t                                  | Timestamp of file creation                                                                                                                                          |
-| Offset        | 19     | 4            | uint32_t                                  | Offset to the first log record (this keeps the header flexible, and extra fields can be added after the header, by default, offset is set to just after the header) |
-| Reserved      | 23     | 1            | uint8_t                                   | Reserved                                                                                                                                                            |
 
-The file header is `24 bytes` in size
+The file header is `19 bytes` in size
 
 ### Log Format
 

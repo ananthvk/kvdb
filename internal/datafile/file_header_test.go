@@ -12,9 +12,8 @@ import (
 func TestWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
 	ts := time.Now()
-	header := NewFileHeader(ts, 0)
 
-	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
+	if err := WriteFileHeader(testFS, "0.dat", ts); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
@@ -44,9 +43,9 @@ func TestReadWriteFileHeader(t *testing.T) {
 	testFS := afero.NewMemMapFs()
 
 	ts := time.Now()
-	header := NewFileHeader(ts, 0)
+	header := NewFileHeader(ts)
 
-	if err := WriteFileHeader(testFS, "0.dat", header); err != nil {
+	if err := WriteFileHeader(testFS, "0.dat", ts); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
@@ -57,10 +56,6 @@ func TestReadWriteFileHeader(t *testing.T) {
 
 	if readHeader.Timestamp.UnixMicro() != header.Timestamp.UnixMicro() {
 		t.Errorf("expected timestamp %v, got %v", header.Timestamp, readHeader.Timestamp)
-	}
-
-	if readHeader.Offset != header.Offset {
-		t.Errorf("expected offset %d, got %d", header.Offset, readHeader.Offset)
 	}
 }
 
