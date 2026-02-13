@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
@@ -18,6 +19,7 @@ import (
 )
 
 type FileManager struct {
+	mu                 sync.RWMutex
 	fs                 afero.Fs
 	dataStoreRootPath  string
 	readers            map[int]*record.Reader
@@ -82,6 +84,8 @@ func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager
 
 // WriteKeyValue Returns fileId, offset (from start of file), error if any
 func (f *FileManager) Write(key []byte, value []byte, isTombstone bool) (int, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.isWriterClosed {
 		// Create the new data file
 		dataFileName := utils.GetDataFileName(f.nextDataFileNumber)
@@ -126,33 +130,20 @@ func (f *FileManager) Write(key []byte, value []byte, isTombstone bool) (int, in
 // ReadRecordAtStrict reads a record at a specific offset in the data file.
 // It caches the reader in the map for future use.
 func (f *FileManager) ReadRecordAtStrict(fileId int, offset int64) (*record.Record, error) {
-	if reader, exists := f.readers[fileId]; exists {
-		return reader.ReadRecordAtStrict(offset)
-	}
-
-	dataFileName := utils.GetDataFileName(fileId)
-	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
+	reader, err := f.getReader(fileId)
 	if err != nil {
 		return nil, err
 	}
-
-	f.readers[fileId] = reader
 	return reader.ReadRecordAtStrict(offset)
 }
 
 // ReadValueAt reads the value at a specific offset in the data file.
 // It caches the reader in the map for future use.
 func (f *FileManager) ReadValueAt(fileId int, offset int64) (*record.Record, error) {
-	if reader, exists := f.readers[fileId]; exists {
-		return reader.ReadValueAt(offset)
-	}
-	dataFileName := utils.GetDataFileName(fileId)
-	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
+	reader, err := f.getReader(fileId)
 	if err != nil {
 		return nil, err
 	}
-
-	f.readers[fileId] = reader
 	return reader.ReadValueAt(offset)
 }
 
@@ -207,11 +198,28 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 }
 
 func (f *FileManager) Sync() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.writer.Sync()
 }
 
 func (f *FileManager) Close() error {
-	return f.writer.Close()
+	f.mu.Lock()
+	if f.writer != nil {
+		if err := f.writer.Close(); err != nil {
+			return err
+		}
+	}
+
+	for id, reader := range f.readers {
+		if err := reader.Close(); err != nil {
+			// TODO: Log it later
+			continue
+		}
+		delete(f.readers, id)
+	}
+
+	return nil
 }
 
 func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int, reader *record.Reader) error {
@@ -232,4 +240,31 @@ func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int, reader *
 		offset += rec.Size
 	}
 	return nil
+}
+
+// Use Double-Checked locking to create / return cached reader
+func (f *FileManager) getReader(fileId int) (*record.Reader, error) {
+	// Check if reader already exists
+	f.mu.RLock()
+	reader, exists := f.readers[fileId]
+	f.mu.RUnlock()
+	if exists {
+		return reader, nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Reader does not exist, update cache by creating a reader
+	if reader, exists := f.readers[fileId]; exists {
+		// Some other goroutine has created a reader before this thread acquired the lock
+		return reader, nil
+	}
+
+	dataFileName := utils.GetDataFileName(fileId)
+	reader, err := record.NewReader(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
+	if err != nil {
+		return nil, err
+	}
+	f.readers[fileId] = reader
+	return reader, nil
 }
