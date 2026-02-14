@@ -2,8 +2,9 @@ package record
 
 import (
 	"encoding/binary"
+	"fmt"
+	"hash"
 	"hash/crc32"
-	"io"
 	"os"
 	"time"
 
@@ -11,13 +12,11 @@ import (
 	"github.com/spf13/afero"
 )
 
-// Reader is responsible for reading log records from a file. There are no locks in this implementation, so it's
-// unsafe to call Reader methods concurrently
+// Reader is responsible for reading log records from a file. This implementation uses ReadAt (that uses pread internally on supported files)
+// and hence is safe to access concurrently
 type Reader struct {
 	fs   afero.Fs
 	file afero.File
-	// Temporary fixed sized buffer to read the record header into
-	buf [20]byte
 }
 
 // NewReader creates a new Record Reader that opens a file at the specified path for reading log records.
@@ -36,24 +35,25 @@ func NewReader(fs afero.Fs, path string) (*Reader, error) {
 // ReadValueAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the value in the returned record. Key is left empty.
 func (r *Reader) ReadValueAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
-		return nil, err
-	}
-	header, err := r.readHeader()
+	currentOffset := offset + datafile.FileHeaderSize
+	header, err := r.readHeader(nil, currentOffset)
 	if err != nil {
 		return nil, err
 	}
+	currentOffset += recordHeaderSize
 	record := &Record{
 		Header: *header,
 		Value:  make([]byte, header.ValueSize),
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
-	// Seek to skip over the key
-	if _, err := r.file.Seek(int64(header.KeySize), io.SeekCurrent); err != nil {
+	// Skip over the key
+	currentOffset += int64(header.KeySize)
+	n, err := r.file.ReadAt(record.Value, currentOffset)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := io.ReadFull(r.file, record.Value); err != nil {
-		return nil, err
+	if n != int(header.ValueSize) {
+		return nil, fmt.Errorf("expected to read %d bytes for value, got %d", header.ValueSize, n)
 	}
 	return record, nil
 }
@@ -61,20 +61,23 @@ func (r *Reader) ReadValueAt(offset int64) (*Record, error) {
 // ReadKeyAt reads a record at the given offset (from the start of the first record).
 // It only reads and populates the key in the returned record. Value is left empty.
 func (r *Reader) ReadKeyAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
-		return nil, err
-	}
-	header, err := r.readHeader()
+	currentOffset := offset + datafile.FileHeaderSize
+	header, err := r.readHeader(nil, currentOffset)
 	if err != nil {
 		return nil, err
 	}
+	currentOffset += recordHeaderSize
 	record := &Record{
 		Header: *header,
 		Key:    make([]byte, header.KeySize),
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
-	if _, err := io.ReadFull(r.file, record.Key); err != nil {
+	n, err := r.file.ReadAt(record.Key, currentOffset)
+	if err != nil {
 		return nil, err
+	}
+	if n != int(header.KeySize) {
+		return nil, fmt.Errorf("expected to read %d bytes for key, got %d", header.KeySize, n)
 	}
 	return record, nil
 }
@@ -82,13 +85,12 @@ func (r *Reader) ReadKeyAt(offset int64) (*Record, error) {
 // ReadRecordAt reads a record at the given offset (from the start of the first record).
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
 func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
-		return nil, err
-	}
-	header, err := r.readHeader()
+	currentOffset := offset + datafile.FileHeaderSize
+	header, err := r.readHeader(nil, currentOffset)
 	if err != nil {
 		return nil, err
 	}
+	currentOffset += recordHeaderSize
 	record := &Record{
 		Header: *header,
 		Key:    make([]byte, header.KeySize),
@@ -96,11 +98,20 @@ func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
-	if _, err := io.ReadFull(r.file, record.Key); err != nil {
+	n, err := r.file.ReadAt(record.Key, currentOffset)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := io.ReadFull(r.file, record.Value); err != nil {
+	if n != int(header.KeySize) {
+		return nil, fmt.Errorf("expected to read %d bytes for key, got %d", header.KeySize, n)
+	}
+	currentOffset += int64(header.KeySize)
+	n, err = r.file.ReadAt(record.Value, currentOffset)
+	if err != nil {
 		return nil, err
+	}
+	if n != int(header.ValueSize) {
+		return nil, fmt.Errorf("expected to read %d bytes for value, got %d", header.ValueSize, n)
 	}
 	return record, nil
 }
@@ -109,23 +120,14 @@ func (r *Reader) ReadRecordAt(offset int64) (*Record, error) {
 // It reads both the key and value from the file, and both the Key and Value in the returned record are valid.
 // It also verifies if the record is valid by computing the CRC checksum
 func (r *Reader) ReadRecordAtStrict(offset int64) (*Record, error) {
-	if _, err := r.file.Seek(offset+datafile.FileHeaderSize, io.SeekStart); err != nil {
-		return nil, err
-	}
+	currentOffset := offset + datafile.FileHeaderSize
 
 	h := crc32.NewIEEE()
-	header, err := r.readHeader()
+	header, err := r.readHeader(h, currentOffset)
 	if err != nil {
 		return nil, err
 	}
-
-	// Update CRC with header info (that is present in r.buf)
-	h.Write(r.buf[:])
-
-	// TODO: Note introduce a check for max key / value size
-	// since otherwise if the key / value size is corrupted, it may
-	// cause a huge number of bytes to be allocated
-	// Can also check file size to see if the file has that many bytes
+	currentOffset += recordHeaderSize
 
 	record := &Record{
 		Header: *header,
@@ -134,25 +136,34 @@ func (r *Reader) ReadRecordAtStrict(offset int64) (*Record, error) {
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
-	if _, err := io.ReadFull(r.file, record.Key); err != nil {
+	n, err := r.file.ReadAt(record.Key, currentOffset)
+	if err != nil {
 		return nil, err
 	}
+	if n != int(header.KeySize) {
+		return nil, fmt.Errorf("expected to read %d bytes for key, got %d", header.KeySize, n)
+	}
+	currentOffset += int64(header.KeySize)
 	h.Write(record.Key)
 
-	if _, err := io.ReadFull(r.file, record.Value); err != nil {
+	n, err = r.file.ReadAt(record.Value, currentOffset)
+	if err != nil {
 		return nil, err
 	}
+	if n != int(header.ValueSize) {
+		return nil, fmt.Errorf("expected to read %d bytes for value, got %d", header.ValueSize, n)
+	}
+	currentOffset += int64(record.Header.ValueSize)
 	h.Write(record.Value)
 
 	crc := h.Sum32()
 
-	// Read the checksum of the record from the file (4 bytes)
-	// Reuse the same buffer
-	if _, err := io.ReadFull(r.file, r.buf[0:4]); err != nil {
+	var buf [4]byte
+	if _, err := r.file.ReadAt(buf[0:4], currentOffset); err != nil {
 		return nil, err
 	}
 
-	fileCrc := binary.LittleEndian.Uint32(r.buf[0:4])
+	fileCrc := binary.LittleEndian.Uint32(buf[0:4])
 
 	if fileCrc != crc {
 		return nil, ErrCrcChecksumMismatch
@@ -165,20 +176,28 @@ func (r *Reader) Close() error {
 	return r.file.Close()
 }
 
-// readHeader reads a record header from the current seek position in the file
-func (r *Reader) readHeader() (*Header, error) {
-	_, err := io.ReadFull(r.file, r.buf[:])
+// readHeader reads a record header from the given offset
+func (r *Reader) readHeader(h hash.Hash32, offset int64) (*Header, error) {
+	var headerBuf [recordHeaderSize]byte
+	n, err := r.file.ReadAt(headerBuf[:], offset)
 	if err != nil {
 		return nil, err
+	}
+	if n != recordHeaderSize {
+		return nil, fmt.Errorf("expected to read %d bytes, got %d", recordHeaderSize, n)
 	}
 
 	// Decode header data from the buffer
 	header := &Header{}
-	header.Timestamp = time.UnixMicro(int64(binary.LittleEndian.Uint64(r.buf[0:])))
-	header.KeySize = binary.LittleEndian.Uint32(r.buf[8:])
-	header.ValueSize = binary.LittleEndian.Uint32(r.buf[12:])
-	header.RecordType = r.buf[16]
-	header.ValueType = r.buf[17]
+	header.Timestamp = time.UnixMicro(int64(binary.LittleEndian.Uint64(headerBuf[0:])))
+	header.KeySize = binary.LittleEndian.Uint32(headerBuf[8:])
+	header.ValueSize = binary.LittleEndian.Uint32(headerBuf[12:])
+	header.RecordType = headerBuf[16]
+	header.ValueType = headerBuf[17]
+
+	if h != nil {
+		h.Write(headerBuf[:])
+	}
 
 	return header, nil
 }
