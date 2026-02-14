@@ -14,7 +14,9 @@ func TestNewFileManager_EmptyDirectory(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	fs.Mkdir("data", os.ModePerm) // Create the data directory
 
-	_, err := NewFileManager(fs, "", 1024)
+	m, err := NewFileManager(fs, "", 1024)
+	// Data files are created lazily
+	m.Write([]byte{}, []byte{}, true)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

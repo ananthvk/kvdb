@@ -21,6 +21,8 @@ type DataStore struct {
 	keydir      *keydir.Keydir
 	fileManager *filemanager.FileManager
 	mu          sync.RWMutex
+	// To ensure that only one merge can occur at a time
+	mergeLock sync.Mutex
 }
 
 const (
@@ -165,7 +167,35 @@ func (dataStore *DataStore) ListKeys() ([]string, error) {
 }
 
 func (dataStore *DataStore) Merge(directoryPath string) error {
-	// nop
+	dataStore.mergeLock.Lock()
+	defer dataStore.mergeLock.Unlock()
+	// A simple implementation of Merge + Compact operation
+
+	// Keydir is then updated to point to the new file location, and older files are removed
+
+	// How it works
+	// ============
+
+	// Get a list of all immutable data files
+	// Create map, key -> (fileid, offset)
+	// Create a merge writer
+	// For each data file
+	//     Read records sequentially from old files
+	//         Rlock datastore
+	//             Check if the record is active (keydir record offset is same as read record offset)
+	//         Runlock datastore
+	//         If the record was active, write it to the temp-merge file (using another instance of file manager)
+	// Lock datastore
+	//     Find out how many temp merge files were created
+	//     In file manager, increment next active datafile by this value
+	//     Rename all temp merge files with sequential values
+	//     Check if the value location in keydir has not changed for the key (i.e. the data has not gone stale)
+	//         If the data is not stale
+	//             Update keydir with temp map, modify file id when updating
+	// Unlock datastore
+
+	// Also note: When reading keydir, timestamp resolves conflicts, i.e. if the timestamp is newer, that value is considered the actual value
+
 	return nil
 }
 

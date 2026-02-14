@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/ananthvk/kvdb/internal/keydir"
@@ -23,15 +22,13 @@ type FileManager struct {
 	fs                 afero.Fs
 	dataStoreRootPath  string
 	readers            map[int]*record.Reader
-	writer             *record.Writer
-	maxDatafileSize    int
+	rotateWriter       *RotateWriter
+	activeDataFile     int
 	nextDataFileNumber int
-	isWriterClosed     bool
 }
 
 func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager, error) {
 	// In ${root}/data directory, find the file with the numerical maximum value, and open it for writing
-	// If such a file does not exist, a new file will be created
 	// If the file is not a data file, it'll be skipped
 	dataDirPath := filepath.Join(path, "data")
 	entries, err := afero.ReadDir(fs, dataDirPath)
@@ -49,82 +46,41 @@ func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager
 				continue
 			}
 
+			// Note: This may or may not be the latest active file
+			// but it doesn't matter in this case (except the case of crash recover)
 			maxDatafileNumber = max(maxDatafileNumber, int(i))
 		}
 	}
 
-	// If there is no datafile, create one
-	if maxDatafileNumber == 0 {
-		maxDatafileNumber = 1
-		dataFileName := utils.GetDataFileName(maxDatafileNumber)
-		// Write the file header
-		err := datafile.WriteFileHeader(fs, filepath.Join(dataDirPath, dataFileName), time.Now())
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// TODO: Implement crash recovery & check to see if it has exceeded max size
-
-	dataFileName := utils.GetDataFileName(maxDatafileNumber)
-	writer, err := record.NewWriter(fs, filepath.Join(dataDirPath, dataFileName))
-	if err != nil {
-		return nil, err
-	}
-
-	return &FileManager{
+	fileManager := &FileManager{
 		fs:                 fs,
 		dataStoreRootPath:  path,
-		maxDatafileSize:    maxDatafileSize,
 		readers:            map[int]*record.Reader{},
+		activeDataFile:     maxDatafileNumber,
 		nextDataFileNumber: maxDatafileNumber + 1,
-		writer:             writer,
-	}, nil
+	}
+
+	fileManager.rotateWriter = NewRotateWriter(fs, maxDatafileSize, func() string {
+		dataFileName := utils.GetDataFileName(fileManager.nextDataFileNumber)
+		// Note: Because of this, each time a restart happens, a new file will be created
+		// And all previous files will be treated as immutable
+		// This is safer for crash recovery, but it's not efficient since a new file is created on every restart
+		// TODO: Fix this later
+		fileManager.activeDataFile = fileManager.nextDataFileNumber
+		fileManager.nextDataFileNumber++
+		return filepath.Join(dataDirPath, dataFileName)
+	})
+
+	return fileManager, nil
 }
 
 // WriteKeyValue Returns fileId, offset (from start of file), error if any
 func (f *FileManager) Write(key []byte, value []byte, isTombstone bool) (int, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.isWriterClosed {
-		// Create the new data file
-		dataFileName := utils.GetDataFileName(f.nextDataFileNumber)
-		// Write the file header
-		err := datafile.WriteFileHeader(f.fs,
-			filepath.Join(f.dataStoreRootPath, "data", dataFileName), time.Now())
-		if err != nil {
-			return 0, 0, err
-		}
-
-		writer, err := record.NewWriter(f.fs, filepath.Join(f.dataStoreRootPath, "data", dataFileName))
-		if err != nil {
-			return 0, 0, err
-		}
-
-		f.writer = writer
-		f.nextDataFileNumber++
-		f.isWriterClosed = false
-	}
-
-	fileId := f.nextDataFileNumber - 1
-	var offset int64
-	var err error
-	if isTombstone {
-		offset, err = f.writer.WriteTombstone(key)
-	} else {
-		offset, err = f.writer.WriteKeyValue(key, value)
-	}
-
-	if err != nil {
-		return 0, 0, err
-	}
-	// Check if we need to split here, and start writing to the next file
-	if offset > int64(f.maxDatafileSize) {
-		f.isWriterClosed = true
-		f.writer.Sync()
-		f.writer.Close()
-	}
-	return fileId, offset, nil
+	_, offset, err := f.rotateWriter.Write(key, value, isTombstone)
+	return f.activeDataFile, offset, err
 }
 
 // ReadRecordAtStrict reads a record at a specific offset in the data file.
@@ -149,50 +105,33 @@ func (f *FileManager) ReadValueAt(fileId int, offset int64) (*record.Record, err
 
 func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 	dataDirPath := filepath.Join(f.dataStoreRootPath, "data")
-	entries, err := afero.ReadDir(f.fs, dataDirPath)
 	kd := keydir.NewKeydir()
+	ids, err := f.getSortedDataFileIDs()
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir() || entries[j].IsDir() {
-			return false
+	for _, id := range ids {
+		fileName := utils.GetDataFileName(id)
+		datafilePath := filepath.Join(dataDirPath, fileName)
+
+		// Check if it's a datafile
+		if _, err := datafile.ReadFileHeader(f.fs, datafilePath); err != nil {
+			fmt.Printf("build keydir, skip %s, error: %s\n", fileName, err)
+			continue
 		}
-		nameI := strings.TrimSuffix(entries[i].Name(), filepath.Ext(entries[i].Name()))
-		nameJ := strings.TrimSuffix(entries[j].Name(), filepath.Ext(entries[j].Name()))
-		numI, _ := strconv.Atoi(nameI)
-		numJ, _ := strconv.Atoi(nameJ)
-		return numI < numJ
-	})
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			filename := entry.Name()
-			extension := filepath.Ext(filename)
-			nameWithoutExt := strings.TrimSuffix(filename, extension)
-			fileId, err := strconv.ParseInt(nameWithoutExt, 10, 32)
-			if err != nil {
-				continue
-			}
 
-			datafilePath := filepath.Join(dataDirPath, filename)
-			// Check if it's a datafile
-			if _, err := datafile.ReadFileHeader(f.fs, datafilePath); err != nil {
-				fmt.Printf("build keydir, skip %s, error: %s\n", filename, err)
-				continue
-			}
-
-			reader, err := record.NewReader(f.fs, datafilePath)
-			if err != nil {
-				fmt.Printf("build keydir, skip %s, error: %s\n", filename, err)
-				continue
-			}
-
-			fmt.Println("Load datafile", entry.Name())
-			err = f.addRecordsToKeydir(kd, int(fileId), reader)
-			if err != nil {
-				fmt.Printf("build keydir, %s error: %s\n", filename, err)
-			}
+		reader, err := record.NewReader(f.fs, datafilePath)
+		if err != nil {
+			fmt.Printf("build keydir, skip %s, error: %s\n", fileName, err)
+			continue
 		}
+
+		fmt.Println("Load datafile", fileName)
+		err = f.addRecordsToKeydir(kd, id, reader)
+		if err != nil {
+			fmt.Printf("build keydir, %s error: %s\n", fileName, err)
+		}
+		reader.Close()
 	}
 	return kd, nil
 }
@@ -200,23 +139,17 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 func (f *FileManager) Sync() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.writer.Sync()
+	return f.rotateWriter.Sync()
 }
 
 func (f *FileManager) Close() error {
 	f.mu.Lock()
-	if f.writer != nil {
-		if err := f.writer.Close(); err != nil {
-			return err
-		}
+	defer f.mu.Unlock()
+	if err := f.rotateWriter.Close(); err != nil {
+		return err
 	}
-
-	for id, reader := range f.readers {
-		if err := reader.Close(); err != nil {
-			// TODO: Log it later
-			continue
-		}
-		delete(f.readers, id)
+	for _, reader := range f.readers {
+		reader.Close()
 	}
 
 	return nil
@@ -267,4 +200,66 @@ func (f *FileManager) getReader(fileId int) (*record.Reader, error) {
 	}
 	f.readers[fileId] = reader
 	return reader, nil
+}
+
+// GetImmutableFiles returns a list of integer Ids for immutable files in
+// the given data store
+func (f *FileManager) GetImmutableFiles() ([]int, error) {
+	f.mu.RLock()
+	snapshotActiveID := f.activeDataFile
+	f.mu.RUnlock()
+	ids, err := f.getSortedDataFileIDs()
+	if err != nil {
+		return nil, err
+	}
+	immutableIds := make([]int, 0, len(ids))
+	for _, id := range ids {
+		// If the fileId is > the last active file ID, a rotation could have
+		// happened, so skip this file for now, and consider it in the next cycle
+		if id < snapshotActiveID {
+			// This is because it's guaranteed that files with ID less < snapshot ID
+			// are all immutable
+			immutableIds = append(immutableIds, id)
+		}
+	}
+	return immutableIds, nil
+}
+
+func (f *FileManager) getSortedDataFileIDs() ([]int, error) {
+	entries, err := afero.ReadDir(f.fs, filepath.Join(f.dataStoreRootPath, "data"))
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []int
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		filename := entry.Name()
+		extension := filepath.Ext(filename)
+		nameWithoutExt := strings.TrimSuffix(filename, extension)
+		fileId, err := strconv.ParseInt(nameWithoutExt, 10, 32)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, int(fileId))
+	}
+	sort.Ints(ids)
+	return ids, nil
+}
+
+type MergeWriter struct {
+	fs            afero.Fs
+	directoryPath string
+}
+
+func (m *MergeWriter) Write() {
+}
+
+func (f *FileManager) NewMergeWriter() (*MergeWriter, error) {
+	return &MergeWriter{
+		fs:            f.fs,
+		directoryPath: filepath.Join(f.dataStoreRootPath, "data"),
+	}, nil
 }
