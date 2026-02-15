@@ -142,7 +142,7 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 		}
 
 		fmt.Println("Load datafile", fileName)
-		err = f.addRecordsToKeydir(kd, id, reader)
+		err = f.addRecordsToKeydir(kd, id)
 		if err != nil {
 			fmt.Printf("build keydir, %s error: %s\n", fileName, err)
 		}
@@ -170,10 +170,14 @@ func (f *FileManager) Close() error {
 	return nil
 }
 
-func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int, reader *record.Reader) error {
-	var offset int64 = 0
+func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int) error {
+	scanner, err := record.NewScanner(f.fs, filepath.Join(f.dataStoreRootPath, "data", utils.GetDataFileName(fileId)))
+	if err != nil {
+		return err
+	}
+	defer scanner.Close()
 	for {
-		rec, err := reader.ReadRecordAtStrict(offset)
+		rec, offset, err := scanner.Scan()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -185,7 +189,6 @@ func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int, reader *
 		} else {
 			kd.AddKeydirRecord(rec.Key, fileId, rec.Header.ValueSize, offset, rec.Header.Timestamp)
 		}
-		offset += rec.Size
 	}
 	return nil
 }

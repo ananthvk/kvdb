@@ -191,17 +191,15 @@ func (dataStore *DataStore) Merge() error {
 	defer mergeWriter.Close()
 
 	for _, dataFile := range immutableFiles {
-		reader, err := dataStore.fileManager.GetReader(dataFile)
+		scanner, err := record.NewScanner(dataStore.fs, filepath.Join(dataStore.path, "data", utils.GetDataFileName(dataFile)))
 		if err != nil {
 			// TODO: Skip this file from merge
 			fmt.Fprintf(os.Stderr, "Could not open file with id %d for merging\n", dataFile)
 			continue
 		}
 
-		// Read records sequentially
-		var offset int64 = 0
 		for {
-			rec, err := reader.ReadRecordAt(offset)
+			rec, offset, err := scanner.Scan()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -220,13 +218,11 @@ func (dataStore *DataStore) Merge() error {
 
 			// This record is stale, skip it
 			if !exists || kdRecord.FileId != dataFile || kdRecord.ValuePos != offset {
-				offset += rec.Size
 				continue
 			}
 
 			if rec.Header.RecordType == record.RecordTypeDelete {
 				// Ignore tombstones
-				offset += rec.Size
 				continue
 			}
 
@@ -241,8 +237,8 @@ func (dataStore *DataStore) Merge() error {
 				ts:           rec.Header.Timestamp,
 				sourceFileId: dataFile,
 			}
-			offset += rec.Size
 		}
+		scanner.Close()
 	}
 
 	// TODO: fsync the directory (after rename)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ananthvk/kvdb"
 	"github.com/spf13/afero"
@@ -37,6 +38,7 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		query := scanner.Text()
+		start := time.Now()
 		if query == "exit" {
 			break
 		}
@@ -98,14 +100,16 @@ func main() {
 			}
 			output = "Seeding completed"
 		case "\\merge":
-			go func() {
+			go func(startTs time.Time) {
+				startTime := time.Now()
 				err := store.Merge()
+				duration := time.Since(startTime)
 				if err == nil {
-					fmt.Println("MERGE OK")
+					fmt.Printf("MERGE OK (took %s)\n", duration)
 				} else {
 					fmt.Println("MERGE ERR", err)
 				}
-			}()
+			}(start)
 			output = "PENDING"
 		case "\\scan":
 			keys, err := store.ListKeys()
@@ -156,7 +160,9 @@ func main() {
 				}
 			}
 		}
+		duration := time.Since(start)
 		fmt.Println(output)
+		fmt.Printf("(took %s)\n", duration)
 		fmt.Print("> ")
 	}
 }
