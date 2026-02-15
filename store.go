@@ -230,8 +230,7 @@ func (dataStore *DataStore) Merge() error {
 				continue
 			}
 
-			// TODO: the timestamp is modified, do not do this, and instead reuse the same timestamp
-			filePath, newPos, err := mergeWriter.Write(rec.Key, rec.Value, false)
+			filePath, newPos, err := mergeWriter.WriteWithTs(rec.Key, rec.Value, false, rec.Header.Timestamp)
 			if err != nil {
 				return err
 			}

@@ -63,6 +63,30 @@ func (r *RotateWriter) Write(key []byte, value []byte, isTombstone bool) (string
 	return r.currentFilePath, offset, nil
 }
 
+// Write Returns file path, offset (from start of file), error if any (with timestamp), Note: Quick hack, I've just copied this function
+func (r *RotateWriter) WriteWithTs(key []byte, value []byte, isTombstone bool, ts time.Time) (string, int64, error) {
+	if r.shouldRotate || r.writer == nil {
+		if err := r.getNewWriter(); err != nil {
+			return r.currentFilePath, 0, err
+		}
+	}
+	r.shouldRotate = false
+	var offset int64
+	var err error
+	if isTombstone {
+		offset, err = r.writer.WriteTombstoneWithTs(key, ts)
+	} else {
+		offset, err = r.writer.WriteKeyValueWithTs(key, value, ts)
+	}
+	if err != nil {
+		return r.currentFilePath, 0, err
+	}
+	if offset > int64(r.maxDatafileSize) {
+		r.shouldRotate = true
+	}
+	return r.currentFilePath, offset, nil
+}
+
 func (r *RotateWriter) getNewWriter() error {
 	if r.writer != nil {
 		if err := r.writer.Sync(); err != nil {

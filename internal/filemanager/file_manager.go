@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/ananthvk/kvdb/internal/keydir"
@@ -284,6 +285,10 @@ type MergeWriter struct {
 // Returns filePath, offset, error (if any)
 func (m *MergeWriter) Write(key []byte, value []byte, isTombstone bool) (string, int64, error) {
 	return m.rotateWriter.Write(key, value, isTombstone)
+}
+
+func (m *MergeWriter) WriteWithTs(key []byte, value []byte, isTombstone bool, timestamp time.Time) (string, int64, error) {
+	return m.rotateWriter.WriteWithTs(key, value, isTombstone, timestamp)
 }
 
 func (m *MergeWriter) Sync() error {

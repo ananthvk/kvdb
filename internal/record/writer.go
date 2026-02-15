@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/afero"
 )
@@ -92,6 +93,20 @@ func (w *Writer) WriteKeyValue(key []byte, value []byte) (int64, error) {
 func (w *Writer) WriteTombstone(key []byte) (int64, error) {
 	start := w.currentPos
 	rec := newRecord(key, nil, RecordTypeDelete)
+	return start, w.writeRecord(rec)
+}
+
+func (w *Writer) WriteKeyValueWithTs(key []byte, value []byte, ts time.Time) (int64, error) {
+	start := w.currentPos
+	rec := newRecord(key, value, recordTypePut)
+	rec.Header.Timestamp = ts
+	return start, w.writeRecord(rec)
+}
+
+func (w *Writer) WriteTombstoneWithTs(key []byte, ts time.Time) (int64, error) {
+	start := w.currentPos
+	rec := newRecord(key, nil, RecordTypeDelete)
+	rec.Header.Timestamp = ts
 	return start, w.writeRecord(rec)
 }
 

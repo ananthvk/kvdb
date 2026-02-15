@@ -98,12 +98,15 @@ func main() {
 			}
 			output = "Seeding completed"
 		case "\\merge":
-			err := store.Merge()
-			if err != nil {
-				output = err.Error()
-			} else {
-				output = "OK"
-			}
+			go func() {
+				err := store.Merge()
+				if err != nil {
+					fmt.Print("MERGE OK")
+				} else {
+					fmt.Print("MERGE ERR", err)
+				}
+			}()
+			output = "PENDING"
 		case "\\scan":
 			keys, err := store.ListKeys()
 			if err != nil {
