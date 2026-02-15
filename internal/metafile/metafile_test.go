@@ -62,7 +62,7 @@ func TestReadMetaFile(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected nil, got error: %v", err)
 	}
-	if metaData.Type != "example" || metaData.Version != "1.0" || metaData.Created != "2023-01-01" || metaData.MaxKeySize != 1024 || metaData.MaxValueSize != 2048 {
+	if metaData.Type != "example" || metaData.Version != "1.0" || metaData.Created != "2023-01-01" {
 		t.Errorf("Expected valid metadata, got %+v", metaData)
 	}
 }
@@ -72,8 +72,6 @@ func TestWriteMetaFile(t *testing.T) {
 		Type:            "example",
 		Version:         "1.0",
 		Created:         "2023-01-01",
-		MaxKeySize:      1024,
-		MaxValueSize:    2048,
 		MaxDatafileSize: 1048576,
 	}
 
@@ -88,7 +86,7 @@ func TestWriteMetaFile(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected nil, got error: %v", err)
 	}
-	expected := "type=example\nversion=1.0\ncreated=2023-01-01\nmax_key_size=1024\nmax_value_size=2048\nmax_datafile_size=1048576\n"
+	expected := "type=example\nversion=1.0\ncreated=2023-01-01\nmax_datafile_size=1048576\n"
 	if string(data) != expected {
 		t.Errorf("Expected data:\n%s\nGot:\n%s", expected, string(data))
 	}

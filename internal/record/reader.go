@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ananthvk/kvdb/internal/constants"
 	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/spf13/afero"
 )
@@ -194,6 +195,14 @@ func (r *Reader) readHeader(h hash.Hash32, offset int64) (*Header, error) {
 	header.ValueSize = binary.LittleEndian.Uint32(headerBuf[12:])
 	header.RecordType = headerBuf[16]
 	header.ValueType = headerBuf[17]
+
+	// Check if key / value size are within the set maximum values
+	if header.KeySize > constants.MaxKeySize {
+		return nil, ErrKeyTooLarge
+	}
+	if header.ValueSize > constants.MaxValueSize {
+		return nil, ErrValueTooLarge
+	}
 
 	if h != nil {
 		h.Write(headerBuf[:])

@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ananthvk/kvdb/internal/constants"
 	"github.com/spf13/afero"
 )
 
@@ -72,6 +73,12 @@ func NewBufferedWriter(fs afero.Fs, path string) (*Writer, error) {
 
 // writeRecord writes the key-value record to the file. It writes the record header, followed by the key & value, then the CRC checksum
 func (w *Writer) writeRecord(r *Record) error {
+	if int(r.Header.KeySize) > constants.MaxKeySize {
+		return ErrKeyTooLarge
+	}
+	if int(r.Header.ValueSize) > constants.MaxValueSize {
+		return ErrKeyTooLarge
+	}
 	var currentWriter io.Writer
 
 	if w.bufferedWriter == nil {

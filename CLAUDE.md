@@ -88,11 +88,6 @@ All integers are Little Endian. Each data file:
 - **Error handling:** Check for `ErrKeyNotFound` and `ErrNotExist` from `errors.go`
 - **Timestamps:** Unix microseconds, used for merge conflict resolution
 
-### Configuration Defaults
-
-- Max key size: 128 bytes
-- Max value size: 64 KB
-- Max data file size: 5 MB (configurable in metafile)
 
 ## Implementation Notes
 

@@ -138,3 +138,28 @@ func TestScanner_Scan_Large(t *testing.T) {
 		t.Fatal("expected error on scanning past end of file, got none")
 	}
 }
+
+func BenchmarkScanner_Scan(b *testing.B) {
+	fs := afero.NewMemMapFs()
+	numRecords := 1000
+	testFilePath := createLargeTestFile(&testing.T{}, fs, numRecords)
+
+	b.ResetTimer()
+	for b.Loop() {
+		b.StopTimer()
+		scanner, err := NewScanner(fs, testFilePath)
+		b.StartTimer()
+		if err != nil {
+			b.Fatalf("expected no error, got %v", err)
+		}
+
+		for range numRecords {
+			_, _, err := scanner.Scan()
+			if err != nil {
+				b.Fatalf("expected no error on scan, got %v", err)
+			}
+		}
+
+		scanner.Close()
+	}
+}

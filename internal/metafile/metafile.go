@@ -14,8 +14,6 @@ type MetaData struct {
 	Type            string
 	Version         string
 	Created         string
-	MaxKeySize      int
-	MaxValueSize    int
 	MaxDatafileSize int
 }
 
@@ -80,10 +78,6 @@ func ReadMetaFile(fs afero.Fs, path string) (*MetaData, error) {
 			metaData.Version = value
 		case "created":
 			metaData.Created = value
-		case "max_key_size":
-			fmt.Sscanf(value, "%d", &metaData.MaxKeySize)
-		case "max_value_size":
-			fmt.Sscanf(value, "%d", &metaData.MaxValueSize)
 		case "max_datafile_size":
 			fmt.Sscanf(value, "%d", &metaData.MaxDatafileSize)
 		}
@@ -120,14 +114,6 @@ func WriteMetaFile(fs afero.Fs, path string, metaData *MetaData) error {
 		return err
 	}
 	_, err = fmt.Fprintf(writer, "created=%s\n", metaData.Created)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(writer, "max_key_size=%d\n", metaData.MaxKeySize)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(writer, "max_value_size=%d\n", metaData.MaxValueSize)
 	if err != nil {
 		return err
 	}

@@ -32,8 +32,6 @@ type DataStore struct {
 const (
 	datastoreType          = "kvdb"          // Type of store
 	version                = "1.0.0"         // Version of the application
-	defaultMaxKeySize      = 128             // In bytes (128 bytes)
-	defaultMaxValueSize    = 64000           // In bytes (64 KB)
 	defaultMaxDatafileSize = 5 * 1000 * 1000 // In bytes (5 MB for testing)
 )
 
@@ -59,8 +57,6 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 		Type:            datastoreType,
 		Version:         version,
 		Created:         time.Now().String(),
-		MaxKeySize:      defaultMaxKeySize,
-		MaxValueSize:    defaultMaxValueSize,
 		MaxDatafileSize: defaultMaxDatafileSize,
 	}
 	// Write the metafile

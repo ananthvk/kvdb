@@ -24,12 +24,13 @@ func NewKeydir() *Keydir {
 // AddKeydirRecord adds a new KeydirRecord. If the timestamp is before the timestamp of an existing key, the update is ignored
 func (k *Keydir) AddKeydirRecord(key []byte, fileId int, valueSize uint32, valuePos int64, timestamp time.Time) {
 	// Ignore stale updates
-	if existing, ok := k.mp[string(key)]; ok {
+	keyStr := string(key)
+	if existing, ok := k.mp[keyStr]; ok {
 		if timestamp.Before(existing.Timestamp) {
 			return
 		}
 	}
-	k.mp[string(key)] = KeydirRecord{
+	k.mp[keyStr] = KeydirRecord{
 		FileId:    fileId,
 		ValueSize: valueSize,
 		ValuePos:  valuePos,

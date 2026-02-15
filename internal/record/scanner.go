@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ananthvk/kvdb/internal/constants"
 	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/spf13/afero"
 )
@@ -25,8 +26,9 @@ type Scanner struct {
 	offset int64
 	reader *bufio.Reader
 
-	headerBuf [recordHeaderSize]byte
-	crcHash   hash.Hash32
+	headerBuf    [recordHeaderSize]byte
+	crcHash      hash.Hash32
+	sharedBuffer []byte
 }
 
 func NewScanner(fs afero.Fs, path string) (*Scanner, error) {
@@ -40,15 +42,22 @@ func NewScanner(fs afero.Fs, path string) (*Scanner, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Max key size + Max value size + 4 bytes (padding) + a few bytes extra for safety
+	const maxRecordSize = constants.MaxKeySize + constants.MaxValueSize + 128
+
 	return &Scanner{
-		fs:      fs,
-		file:    file,
-		reader:  reader,
-		crcHash: crc32.NewIEEE(),
+		fs:           fs,
+		file:         file,
+		reader:       reader,
+		crcHash:      crc32.NewIEEE(),
+		sharedBuffer: make([]byte, maxRecordSize),
 	}, nil
 }
 
 // Scan returns the next record, the offset for the start of the record (from the first record)
+// Note: They Key & Value inside record are backed by a shared buffer, and hence it'll be overwritten the next time
+// Scan is called. If you need the record key / value later, make a copy
 func (scanner *Scanner) Scan() (*Record, int64, error) {
 	scanner.crcHash.Reset()
 	recordOffset := scanner.offset
@@ -56,10 +65,17 @@ func (scanner *Scanner) Scan() (*Record, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+
+	keyStart := 0
+	keyEnd := keyStart + int(header.KeySize)
+
+	valStart := keyEnd
+	valEnd := valStart + int(header.ValueSize)
+
 	record := &Record{
 		Header: *header,
-		Key:    make([]byte, header.KeySize),
-		Value:  make([]byte, header.ValueSize),
+		Key:    scanner.sharedBuffer[keyStart:keyEnd],
+		Value:  scanner.sharedBuffer[valStart:valEnd],
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
@@ -102,6 +118,15 @@ func (scanner *Scanner) readHeader(h hash.Hash32) (*Header, error) {
 	header.ValueSize = binary.LittleEndian.Uint32(scanner.headerBuf[12:])
 	header.RecordType = scanner.headerBuf[16]
 	header.ValueType = scanner.headerBuf[17]
+
+	// Check if key / value size are within the set maximum values
+	// This is to detect corruption to header (i.e. if the size gets corrupted and it becomes a very huge value)
+	if header.KeySize > constants.MaxKeySize {
+		return nil, ErrKeyTooLarge
+	}
+	if header.ValueSize > constants.MaxValueSize {
+		return nil, ErrValueTooLarge
+	}
 
 	if h != nil {
 		h.Write(scanner.headerBuf[:])

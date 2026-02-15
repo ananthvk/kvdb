@@ -19,25 +19,65 @@ func BenchmarkRead(b *testing.B) {
 	}
 }
 
-/*
-func BenchmarkFold(b *testing.B) {
+func BenchmarkWriteLargeData(b *testing.B) {
 	testFS := afero.NewMemMapFs()
-	store, err := Create(testFS, "test2.dat")
+	store, err := Create(testFS, "test_write.dat")
 	if err != nil {
 		b.Fatalf("could not create datastore %v", err)
 	}
-	count := 1000
-	// Insert count keys
-	keys := make([][]byte, count)
-	for i := range count {
-		keys[i] = fmt.Appendf(nil, "%d", i)
-		store.Put(keys[i], []byte("ha ha"))
+
+	// Pre-allocate key and value buffers
+	key := make([]byte, 999)       // 1 KB key
+	value := make([]byte, 999*999) // 1 MB value
+
+	// Fill with some data
+	for i := range key {
+		key[i] = byte(i % 256)
 	}
+	for i := range value {
+		value[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+	i := 0
 	for b.Loop() {
-		acc, _ := Fold(store, func(k, v []byte, acc int) int { return acc + 1 }, 0)
-		if acc != count {
-			b.Fatalf("expected 1000 items, got %d", acc)
+		// Vary the key slightly for each iteration
+		key[0] = byte(i % 256)
+		if err := store.Put(key, value); err != nil {
+			b.Fatalf("Put failed: %v", err)
+		}
+		i++
+	}
+}
+
+func BenchmarkReadLargeData(b *testing.B) {
+	testFS := afero.NewMemMapFs()
+	store, err := Create(testFS, "test_read.dat")
+	if err != nil {
+		b.Fatalf("could not create datastore %v", err)
+	}
+
+	// Pre-allocate key and value buffers
+	key := make([]byte, 999)       // 1 KB key
+	value := make([]byte, 999*999) // 1 MB value
+
+	// Fill with some data
+	for i := range key {
+		key[i] = byte(i % 256)
+	}
+	for i := range value {
+		value[i] = byte(i % 256)
+	}
+
+	// Write the data once before benchmarking reads
+	if err := store.Put(key, value); err != nil {
+		b.Fatalf("Put failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := store.Get(key); err != nil {
+			b.Fatalf("Get failed: %v", err)
 		}
 	}
 }
-*/

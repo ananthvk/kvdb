@@ -21,16 +21,26 @@ func main() {
 	// }()
 	// go tool pprof http://localhost:6060/debug/pprof/profile\?seconds\=10
 
-	fs := afero.NewOsFs()
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: kvcli <path>")
+		fmt.Fprintln(os.Stderr, "Usage: kvcli <path> | :memory")
 		os.Exit(1)
 	}
-	store, err := kvdb.Open(fs, os.Args[1])
+
+	filePath := os.Args[1]
+	var fs afero.Fs
+	if os.Args[1] == ":memory" {
+		fs = afero.NewMemMapFs()
+		filePath = "in-memory-" + time.Now().Format(time.RFC3339) + "-db"
+	} else {
+		fs = afero.NewOsFs()
+	}
+	fmt.Printf("Opened datastore %s\n", filePath)
+
+	store, err := kvdb.Open(fs, filePath)
 	if err != nil {
 		fmt.Println(err)
 		// Try creating it
-		store, err = kvdb.Create(fs, os.Args[1])
+		store, err = kvdb.Create(fs, filePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "(error) CREATE: %s", err)
 			os.Exit(1)

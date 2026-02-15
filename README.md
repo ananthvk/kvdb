@@ -68,8 +68,13 @@ Example structure
 name = testdb
 version = 1.0.0
 created = 2026-02-10 11:32:00.118157 +0000 UTC
-max_key_size = 128 # In bytes
-max_value_size = 64000 # 64KB
-max_datafile_size = 1000001000 # 100 MB
+max_datafile_size=5000000
 ```
-These values will only be used for new keys, values and datafiles. Existing data will remain unaffected if the values are changed
+
+## Key & Value size limits
+
+Keys have a maximum size of `1000 bytes (1 KB)`
+
+And values have a maximum size of `1000000 bytes  (1 MB)`
+
+Default value of max data file size is `5000000 bytes (5MB)` but it's configurable through `kvdb_store.meta` file

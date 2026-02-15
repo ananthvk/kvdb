@@ -141,7 +141,6 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 			continue
 		}
 
-		fmt.Println("Load datafile", fileName)
 		err = f.addRecordsToKeydir(kd, id)
 		if err != nil {
 			fmt.Printf("build keydir, %s error: %s\n", fileName, err)
