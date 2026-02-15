@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ananthvk/kvdb"
@@ -59,6 +60,67 @@ func main() {
 		case "\\sync":
 			store.Sync()
 			output = "OK"
+		case "\\seed":
+			for i := 1; i <= 15; i++ {
+				err := store.Put(fmt.Appendf(nil, "key%02d", i), fmt.Appendf(nil, "value%d", i))
+				if err != nil {
+					output = fmt.Sprintf("(error) SEED: %s", err)
+					break
+				}
+			}
+			for i := 1; i <= 10; i++ {
+				err := store.Delete(fmt.Appendf(nil, "key%02d", i))
+				if err != nil {
+					output = fmt.Sprintf("(error) DELETE: %s", err)
+					break
+				}
+			}
+			for i := 1; i <= 5; i++ {
+				err := store.Put(fmt.Appendf(nil, "key%02d", i), fmt.Appendf(nil, "updated_value%d", i))
+				if err != nil {
+					output = fmt.Sprintf("(error) UPDATE: %s", err)
+					break
+				}
+			}
+			for i := 12; i <= 13; i++ {
+				err := store.Put(fmt.Appendf(nil, "key%02d", i), fmt.Appendf(nil, "updated_value%d", i))
+				if err != nil {
+					output = fmt.Sprintf("(error) UPDATE: %s", err)
+					break
+				}
+			}
+			for i := 16; i <= 17; i++ {
+				err := store.Put(fmt.Appendf(nil, "key%02d", i), fmt.Appendf(nil, "value%d", i))
+				if err != nil {
+					output = fmt.Sprintf("(error) ADD: %s", err)
+					break
+				}
+			}
+			output = "Seeding completed"
+		case "\\merge":
+			err := store.Merge()
+			if err != nil {
+				output = err.Error()
+			} else {
+				output = "OK"
+			}
+		case "\\scan":
+			keys, err := store.ListKeys()
+			if err != nil {
+				output = fmt.Sprintf("(error) \\scan: %s", err)
+				break
+			}
+			sort.Strings(keys) // Sort the keys
+			var values []string
+			for _, key := range keys {
+				value, err := store.Get([]byte(key))
+				if err != nil {
+					values = append(values, fmt.Sprintf("(error) GET %s: %s", key, err))
+				} else {
+					values = append(values, fmt.Sprintf("%s=%s", key, value))
+				}
+			}
+			output = strings.Join(values, "\n")
 		default:
 			if after, ok := strings.CutPrefix(query, "\\delete "); ok {
 				key := after

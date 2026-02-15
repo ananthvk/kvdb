@@ -17,6 +17,8 @@ import (
 	"github.com/spf13/afero"
 )
 
+const mergePrefix = "merge"
+
 type FileManager struct {
 	mu                 sync.RWMutex
 	fs                 afero.Fs
@@ -86,7 +88,7 @@ func (f *FileManager) Write(key []byte, value []byte, isTombstone bool) (int, in
 // ReadRecordAtStrict reads a record at a specific offset in the data file.
 // It caches the reader in the map for future use.
 func (f *FileManager) ReadRecordAtStrict(fileId int, offset int64) (*record.Record, error) {
-	reader, err := f.getReader(fileId)
+	reader, err := f.GetReader(fileId)
 	if err != nil {
 		return nil, err
 	}
@@ -96,11 +98,23 @@ func (f *FileManager) ReadRecordAtStrict(fileId int, offset int64) (*record.Reco
 // ReadValueAt reads the value at a specific offset in the data file.
 // It caches the reader in the map for future use.
 func (f *FileManager) ReadValueAt(fileId int, offset int64) (*record.Record, error) {
-	reader, err := f.getReader(fileId)
+	reader, err := f.GetReader(fileId)
 	if err != nil {
 		return nil, err
 	}
 	return reader.ReadValueAt(offset)
+}
+
+// CloseAndDeleteReaders closes and deletes the readers for the given list of IDs.
+func (f *FileManager) CloseAndDeleteReaders(ids []int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range ids {
+		if reader, exists := f.readers[id]; exists {
+			reader.Close()
+			delete(f.readers, id)
+		}
+	}
 }
 
 func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
@@ -176,7 +190,7 @@ func (f *FileManager) addRecordsToKeydir(kd *keydir.Keydir, fileId int, reader *
 }
 
 // Use Double-Checked locking to create / return cached reader
-func (f *FileManager) getReader(fileId int) (*record.Reader, error) {
+func (f *FileManager) GetReader(fileId int) (*record.Reader, error) {
 	// Check if reader already exists
 	f.mu.RLock()
 	reader, exists := f.readers[fileId]
@@ -249,17 +263,54 @@ func (f *FileManager) getSortedDataFileIDs() ([]int, error) {
 	return ids, nil
 }
 
+// IncrementNextDataFileNumber increments the next data file number by the specified value.
+// It returns the value of nextDataFileNumber before the increment
+func (f *FileManager) IncrementNextDataFileNumber(n int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	nextDataFileNumber := f.nextDataFileNumber
+	f.nextDataFileNumber += n
+	return nextDataFileNumber
+}
+
+// Note: Does not lock rotateWriter internally and is hence unsafe for concurrent use
 type MergeWriter struct {
 	fs            afero.Fs
 	directoryPath string
+	rotateWriter  *RotateWriter
+	filePaths     []string
 }
 
-func (m *MergeWriter) Write() {
+// Returns filePath, offset, error (if any)
+func (m *MergeWriter) Write(key []byte, value []byte, isTombstone bool) (string, int64, error) {
+	return m.rotateWriter.Write(key, value, isTombstone)
+}
+
+func (m *MergeWriter) Sync() error {
+	return m.rotateWriter.Sync()
+}
+
+func (m *MergeWriter) Close() error {
+	return m.rotateWriter.Close()
 }
 
 func (f *FileManager) NewMergeWriter() (*MergeWriter, error) {
-	return &MergeWriter{
+	counter := 0
+	mergeWriter := &MergeWriter{
 		fs:            f.fs,
 		directoryPath: filepath.Join(f.dataStoreRootPath, "data"),
-	}, nil
+	}
+	rotateWriter := NewRotateWriter(f.fs, f.rotateWriter.maxDatafileSize, func() string {
+		counter++
+		dataFilePath := filepath.Join(mergeWriter.directoryPath, fmt.Sprintf("%s-%d", mergePrefix, counter))
+		mergeWriter.filePaths = append(mergeWriter.filePaths, dataFilePath)
+		return dataFilePath
+	})
+	mergeWriter.rotateWriter = rotateWriter
+	return mergeWriter, nil
+}
+
+// Returns a list of paths of all files created by this merge writer
+func (m *MergeWriter) GetFilePaths() []string {
+	return m.filePaths
 }

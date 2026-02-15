@@ -2,6 +2,8 @@ package kvdb
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +13,8 @@ import (
 	"github.com/ananthvk/kvdb/internal/filemanager"
 	"github.com/ananthvk/kvdb/internal/keydir"
 	"github.com/ananthvk/kvdb/internal/metafile"
+	"github.com/ananthvk/kvdb/internal/record"
+	"github.com/ananthvk/kvdb/internal/utils"
 	"github.com/spf13/afero"
 )
 
@@ -165,36 +169,125 @@ func (dataStore *DataStore) ListKeys() ([]string, error) {
 	defer dataStore.mu.RUnlock()
 	return dataStore.keydir.GetAllKeys(), nil
 }
-
-func (dataStore *DataStore) Merge(directoryPath string) error {
+func (dataStore *DataStore) Merge() error {
 	dataStore.mergeLock.Lock()
 	defer dataStore.mergeLock.Unlock()
-	// A simple implementation of Merge + Compact operation
+	immutableFiles, err := dataStore.fileManager.GetImmutableFiles()
+	if err != nil {
+		return err
+	}
 
-	// Keydir is then updated to point to the new file location, and older files are removed
+	type valueLoc struct {
+		path         string
+		offset       int64
+		ts           time.Time
+		sourceFileId int
+	}
+	valueLocations := map[string]valueLoc{}
+	mergeWriter, err := dataStore.fileManager.NewMergeWriter()
+	if err != nil {
+		return err
+	}
+	defer mergeWriter.Close()
 
-	// How it works
-	// ============
+	for _, dataFile := range immutableFiles {
+		reader, err := dataStore.fileManager.GetReader(dataFile)
+		if err != nil {
+			// TODO: Skip this file from merge
+			fmt.Fprintf(os.Stderr, "Could not open file with id %d for merging\n", dataFile)
+			continue
+		}
 
-	// Get a list of all immutable data files
-	// Create map, key -> (fileid, offset)
-	// Create a merge writer
-	// For each data file
-	//     Read records sequentially from old files
-	//         Rlock datastore
-	//             Check if the record is active (keydir record offset is same as read record offset)
-	//         Runlock datastore
-	//         If the record was active, write it to the temp-merge file (using another instance of file manager)
-	// Lock datastore
-	//     Find out how many temp merge files were created
-	//     In file manager, increment next active datafile by this value
-	//     Rename all temp merge files with sequential values
-	//     Check if the value location in keydir has not changed for the key (i.e. the data has not gone stale)
-	//         If the data is not stale
-	//             Update keydir with temp map, modify file id when updating
-	// Unlock datastore
+		// Read records sequentially
+		var offset int64 = 0
+		for {
+			rec, err := reader.ReadRecordAt(offset)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				// TODO: Skip this file
+				return err
+			}
 
-	// Also note: When reading keydir, timestamp resolves conflicts, i.e. if the timestamp is newer, that value is considered the actual value
+			// Check if the record is active
+			var exists bool
+			var kdRecord keydir.KeydirRecord
+
+			dataStore.mu.RLock()
+			kdRecord, exists = dataStore.keydir.GetKeydirRecord(rec.Key)
+			dataStore.mu.RUnlock()
+
+			// This record is stale, skip it
+			if !exists || kdRecord.FileId != dataFile || kdRecord.ValuePos != offset {
+				offset += rec.Size
+				continue
+			}
+
+			if rec.Header.RecordType == record.RecordTypeDelete {
+				// Ignore tombstones
+				offset += rec.Size
+				continue
+			}
+
+			// TODO: the timestamp is modified, do not do this, and instead reuse the same timestamp
+			filePath, newPos, err := mergeWriter.Write(rec.Key, rec.Value, false)
+			if err != nil {
+				return err
+			}
+
+			valueLocations[string(rec.Key)] = valueLoc{
+				path:         filePath,
+				offset:       newPos,
+				ts:           rec.Header.Timestamp,
+				sourceFileId: dataFile,
+			}
+			offset += rec.Size
+		}
+	}
+
+	// TODO: fsync the directory (after rename)
+	mergeWriter.Sync()
+	mergeWriter.Close()
+
+	tempFilesList := mergeWriter.GetFilePaths()
+
+	// Get the write lock, reserve the file Ids
+	dataStore.mu.Lock()
+	startId := dataStore.fileManager.IncrementNextDataFileNumber(len(tempFilesList))
+	dataStore.mu.Unlock()
+
+	// Now, rename all temporary files starting from startId
+	realFileIds := make(map[string]int)
+	for i, mergeFilePath := range tempFilesList {
+		realId := startId + i
+		dataStore.fs.Rename(mergeFilePath, filepath.Join(dataStore.path, "data", utils.GetDataFileName(realId)))
+
+		// To be used when updating keydir
+		realFileIds[mergeFilePath] = realId
+	}
+
+	// Get the write lock, and update keydir with new Ids
+	dataStore.mu.Lock()
+
+	for key, loc := range valueLocations {
+		// Only update if the key in keydir is still pointing to old file (i.e. the value has not been updated)
+		keyBytes := []byte(key)
+		current, exists := dataStore.keydir.GetKeydirRecord(keyBytes)
+		if exists && current.FileId == loc.sourceFileId {
+			realID := realFileIds[loc.path]
+			dataStore.keydir.AddKeydirRecord(keyBytes, realID, current.ValueSize, loc.offset-datafile.FileHeaderSize, current.Timestamp)
+		}
+	}
+	dataStore.mu.Unlock()
+
+	// Delete old immutable files
+	for _, dataFile := range immutableFiles {
+		filePath := filepath.Join(dataStore.path, "data", utils.GetDataFileName(dataFile))
+		dataStore.fs.Remove(filePath)
+	}
+
+	dataStore.fileManager.CloseAndDeleteReaders(immutableFiles)
 
 	return nil
 }
