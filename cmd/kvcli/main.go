@@ -36,6 +36,7 @@ func main() {
 	}
 	fmt.Printf("Opened datastore %s\n", filePath)
 
+	start := time.Now()
 	store, err := kvdb.Open(fs, filePath)
 	if err != nil {
 		fmt.Println(err)
@@ -46,6 +47,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	openDuration := time.Since(start)
+	fmt.Printf("(took %s to open/create)\n", openDuration)
 	defer store.Close()
 
 	fmt.Println("Welcome to kvdb cli, type \"exit\" to quit")

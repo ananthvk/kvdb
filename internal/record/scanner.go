@@ -58,12 +58,12 @@ func NewScanner(fs afero.Fs, path string) (*Scanner, error) {
 // Scan returns the next record, the offset for the start of the record (from the first record)
 // Note: They Key & Value inside record are backed by a shared buffer, and hence it'll be overwritten the next time
 // Scan is called. If you need the record key / value later, make a copy
-func (scanner *Scanner) Scan() (*Record, int64, error) {
+func (scanner *Scanner) Scan() (Record, int64, error) {
 	scanner.crcHash.Reset()
 	recordOffset := scanner.offset
 	header, err := scanner.readHeader(scanner.crcHash)
 	if err != nil {
-		return nil, 0, err
+		return Record{}, 0, err
 	}
 
 	keyStart := 0
@@ -72,47 +72,47 @@ func (scanner *Scanner) Scan() (*Record, int64, error) {
 	valStart := keyEnd
 	valEnd := valStart + int(header.ValueSize)
 
-	record := &Record{
-		Header: *header,
+	record := Record{
+		Header: header,
 		Key:    scanner.sharedBuffer[keyStart:keyEnd],
 		Value:  scanner.sharedBuffer[valStart:valEnd],
 		Size:   int64(recordHeaderSize + header.KeySize + header.ValueSize + 4),
 	}
 
 	if _, err = io.ReadFull(scanner.reader, record.Key); err != nil {
-		return nil, 0, err
+		return Record{}, 0, err
 	}
 	scanner.crcHash.Write(record.Key)
 	if _, err = io.ReadFull(scanner.reader, record.Value); err != nil {
-		return nil, 0, err
+		return Record{}, 0, err
 	}
 	scanner.crcHash.Write(record.Value)
 
 	// Check CRC
 	crc := scanner.crcHash.Sum32()
 	if _, err := io.ReadFull(scanner.reader, scanner.headerBuf[0:4]); err != nil {
-		return nil, 0, err
+		return Record{}, 0, err
 	}
 	fileCrc := binary.LittleEndian.Uint32(scanner.headerBuf[0:4])
 	if fileCrc != crc {
-		return nil, 0, ErrCrcChecksumMismatch
+		return Record{}, 0, ErrCrcChecksumMismatch
 	}
 	scanner.offset += record.Size
 	return record, recordOffset, nil
 }
 
 // readHeader reads a record header at the current position
-func (scanner *Scanner) readHeader(h hash.Hash32) (*Header, error) {
+func (scanner *Scanner) readHeader(h hash.Hash32) (Header, error) {
 	n, err := io.ReadFull(scanner.reader, scanner.headerBuf[:])
 	if err != nil {
-		return nil, err
+		return Header{}, err
 	}
 	if n != recordHeaderSize {
-		return nil, fmt.Errorf("expected to read %d bytes, got %d", recordHeaderSize, n)
+		return Header{}, fmt.Errorf("expected to read %d bytes, got %d", recordHeaderSize, n)
 	}
 
 	// Decode header data from the buffer
-	header := &Header{}
+	header := Header{}
 	header.Timestamp = time.UnixMicro(int64(binary.LittleEndian.Uint64(scanner.headerBuf[0:])))
 	header.KeySize = binary.LittleEndian.Uint32(scanner.headerBuf[8:])
 	header.ValueSize = binary.LittleEndian.Uint32(scanner.headerBuf[12:])
@@ -122,10 +122,10 @@ func (scanner *Scanner) readHeader(h hash.Hash32) (*Header, error) {
 	// Check if key / value size are within the set maximum values
 	// This is to detect corruption to header (i.e. if the size gets corrupted and it becomes a very huge value)
 	if header.KeySize > constants.MaxKeySize {
-		return nil, ErrKeyTooLarge
+		return Header{}, ErrKeyTooLarge
 	}
 	if header.ValueSize > constants.MaxValueSize {
-		return nil, ErrValueTooLarge
+		return Header{}, ErrValueTooLarge
 	}
 
 	if h != nil {
