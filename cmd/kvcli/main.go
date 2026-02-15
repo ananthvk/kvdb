@@ -10,9 +10,17 @@ import (
 
 	"github.com/ananthvk/kvdb"
 	"github.com/spf13/afero"
+	//_ "net/http/pprof"
+	// "net/http"
 )
 
 func main() {
+
+	// go func() {
+	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
+	// go tool pprof http://localhost:6060/debug/pprof/profile\?seconds\=10
+
 	fs := afero.NewOsFs()
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: kvcli <path>")
