@@ -1,6 +1,7 @@
 package record
 
 import (
+	"bufio"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"github.com/spf13/afero"
 )
 
+const writerBufferSize = 4 * 1000 * 1000 // 4MB buffer size
+
 // Writer is responsible for writing log records to the file. There are no locks in this implementation, so it's
 // unsafe to call Writer methods concurrently
 type Writer struct {
@@ -18,6 +21,9 @@ type Writer struct {
 	// Internal buffer used to temporarily hold record header
 	buf        [recordHeaderSize]byte
 	currentPos int64
+
+	// Used during merge operation to reduce the number of syscalls
+	bufferedWriter *bufio.Writer
 }
 
 // NewWriter creates a new Record Writer that opens a file at the specified path for appending logs
@@ -35,14 +41,45 @@ func NewWriter(fs afero.Fs, path string) (*Writer, error) {
 	}
 
 	return &Writer{
-		fs:         fs,
-		file:       file,
-		currentPos: pos,
+		fs:             fs,
+		file:           file,
+		bufferedWriter: nil,
+		currentPos:     pos,
+	}, nil
+}
+
+// NewBufferedWriter creates a new Buffered Record Writer that opens a file at the specified path for appending logs
+// Note: It uses a bufio.Writer internally, it's good for merging records, but remember to Sync() otherwise data will get lost
+func NewBufferedWriter(fs afero.Fs, path string) (*Writer, error) {
+	file, err := fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
+	if err != nil {
+		return nil, err
+	}
+
+	stat, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+
+	return &Writer{
+		fs:             fs,
+		file:           file,
+		bufferedWriter: bufio.NewWriterSize(file, writerBufferSize),
+		currentPos:     stat.Size(),
 	}, nil
 }
 
 // writeRecord writes the key-value record to the file. It writes the record header, followed by the key & value, then the CRC checksum
 func (w *Writer) writeRecord(r *Record) error {
+	var currentWriter io.Writer
+
+	if w.bufferedWriter == nil {
+		currentWriter = w.file
+	} else {
+		currentWriter = w.bufferedWriter
+	}
+
 	h := crc32.NewIEEE()
 	// Set header fields
 	binary.LittleEndian.PutUint64(w.buf[0:], uint64(r.Header.Timestamp.UnixMicro())) // Unix timestamp (in microseconds)
@@ -55,23 +92,23 @@ func (w *Writer) writeRecord(r *Record) error {
 
 	// Update CRC with header info
 	h.Write(w.buf[:])
-	if _, err := w.file.Write(w.buf[:]); err != nil {
+	if _, err := currentWriter.Write(w.buf[:]); err != nil {
 		return err
 	}
 
 	// Update CRC with key & value
 	h.Write(r.Key)
-	if _, err := w.file.Write(r.Key); err != nil {
+	if _, err := currentWriter.Write(r.Key); err != nil {
 		return err
 	}
 	h.Write(r.Value)
-	if _, err := w.file.Write(r.Value); err != nil {
+	if _, err := currentWriter.Write(r.Value); err != nil {
 		return err
 	}
 
 	// Write the CRC of the record at the end
 	crc := h.Sum32()
-	if err := binary.Write(w.file, binary.LittleEndian, crc); err != nil {
+	if err := binary.Write(currentWriter, binary.LittleEndian, crc); err != nil {
 		return err
 	}
 	w.currentPos += int64(r.Size)
@@ -112,11 +149,18 @@ func (w *Writer) WriteTombstoneWithTs(key []byte, ts time.Time) (int64, error) {
 
 // Sync flushes any buffered data to the underlying file. It calls sync() on the file
 func (w *Writer) Sync() error {
+	if w.bufferedWriter != nil {
+		w.bufferedWriter.Flush()
+	}
 	return w.file.Sync()
 }
 
 // Close closes the underlying file, it also writes any pending changes and syncs the changes to the disk
 func (w *Writer) Close() error {
+	if w.bufferedWriter != nil {
+		w.bufferedWriter.Flush()
+		w.bufferedWriter = nil
+	}
 	if err := w.file.Sync(); err != nil {
 		return err
 	}

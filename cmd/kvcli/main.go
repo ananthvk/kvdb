@@ -100,10 +100,10 @@ func main() {
 		case "\\merge":
 			go func() {
 				err := store.Merge()
-				if err != nil {
-					fmt.Print("MERGE OK")
+				if err == nil {
+					fmt.Println("MERGE OK")
 				} else {
-					fmt.Print("MERGE ERR", err)
+					fmt.Println("MERGE ERR", err)
 				}
 			}()
 			output = "PENDING"

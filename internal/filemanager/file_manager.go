@@ -64,7 +64,7 @@ func NewFileManager(fs afero.Fs, path string, maxDatafileSize int) (*FileManager
 		nextDataFileNumber: maxDatafileNumber + 1,
 	}
 
-	fileManager.rotateWriter = NewRotateWriter(fs, maxDatafileSize, func() string {
+	fileManager.rotateWriter = NewRotateWriter(fs, maxDatafileSize, false, func() string {
 		dataFileName := utils.GetDataFileName(fileManager.nextDataFileNumber)
 		// Note: Because of this, each time a restart happens, a new file will be created
 		// And all previous files will be treated as immutable
@@ -299,13 +299,15 @@ func (m *MergeWriter) Close() error {
 	return m.rotateWriter.Close()
 }
 
+// NewMergeWriter returns a merge writer. Note: Then underlying RotateWriter is opened in buffered mode to improve performance
+// So, Sync() is mandatory to write contents of file to disk
 func (f *FileManager) NewMergeWriter() (*MergeWriter, error) {
 	counter := 0
 	mergeWriter := &MergeWriter{
 		fs:            f.fs,
 		directoryPath: filepath.Join(f.dataStoreRootPath, "data"),
 	}
-	rotateWriter := NewRotateWriter(f.fs, f.rotateWriter.maxDatafileSize, func() string {
+	rotateWriter := NewRotateWriter(f.fs, f.rotateWriter.maxDatafileSize, true, func() string {
 		counter++
 		dataFilePath := filepath.Join(mergeWriter.directoryPath, fmt.Sprintf("%s-%d", mergePrefix, counter))
 		mergeWriter.filePaths = append(mergeWriter.filePaths, dataFilePath)

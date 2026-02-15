@@ -17,6 +17,7 @@ type RotateWriter struct {
 	maxDatafileSize int
 	currentFilePath string
 	shouldRotate    bool
+	isBuffered      bool
 
 	// Callback function to get the next file path
 	// This function is called when the writer wants to rotate to the next file
@@ -102,20 +103,29 @@ func (r *RotateWriter) getNewWriter() error {
 	if err != nil {
 		return err
 	}
-	writer, err := record.NewWriter(r.fs, r.currentFilePath)
-	if err != nil {
-		return err
+	if r.isBuffered {
+		writer, err := record.NewBufferedWriter(r.fs, r.currentFilePath)
+		if err != nil {
+			return err
+		}
+		r.writer = writer
+	} else {
+		writer, err := record.NewWriter(r.fs, r.currentFilePath)
+		if err != nil {
+			return err
+		}
+		r.writer = writer
 	}
-	r.writer = writer
 	return nil
 }
 
 // NewRotateWriter creates a new instance of RotateWriter with the specified parameters.
-func NewRotateWriter(fs afero.Fs, maxDatafileSize int, getNextFilePath func() string) *RotateWriter {
+func NewRotateWriter(fs afero.Fs, maxDatafileSize int, isBuffered bool, getNextFilePath func() string) *RotateWriter {
 	return &RotateWriter{
 		fs:              fs,
 		maxDatafileSize: maxDatafileSize,
 		getNextFilePath: getNextFilePath,
 		shouldRotate:    false,
+		isBuffered:      isBuffered,
 	}
 }

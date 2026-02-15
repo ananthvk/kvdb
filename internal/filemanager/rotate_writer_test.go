@@ -13,7 +13,7 @@ func TestRotateWriter_Write(t *testing.T) {
 		fileCounter++
 		return "testfile_" + string(rune(fileCounter)) + ".dat"
 	}
-	writer := NewRotateWriter(fs, 10, getNextFilePath)
+	writer := NewRotateWriter(fs, 10, false, getNextFilePath)
 
 	tests := []struct {
 		key         []byte
@@ -49,7 +49,7 @@ func TestRotateWriter_Close(t *testing.T) {
 	getNextFilePath := func() string {
 		return "testfile.dat"
 	}
-	writer := NewRotateWriter(fs, 10, getNextFilePath)
+	writer := NewRotateWriter(fs, 10, false, getNextFilePath)
 
 	_, _, err := writer.Write([]byte("key1"), []byte("value1"), false)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestRotateWriter_Sync(t *testing.T) {
 	getNextFilePath := func() string {
 		return "testfile.dat"
 	}
-	writer := NewRotateWriter(fs, 10, getNextFilePath)
+	writer := NewRotateWriter(fs, 10, false, getNextFilePath)
 
 	_, _, err := writer.Write([]byte("key1"), []byte("value1"), false)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestRotateWriter_GetNewWriter_Error(t *testing.T) {
 	getNextFilePath := func() string {
 		return "testfile.dat"
 	}
-	writer := NewRotateWriter(fs, 10, getNextFilePath)
+	writer := NewRotateWriter(fs, 10, false, getNextFilePath)
 
 	writer.getNextFilePath = func() string {
 		return ""
@@ -103,7 +103,7 @@ func TestRotateWriter_MultipleRotations(t *testing.T) {
 		fileCounter++
 		return "testfile_" + string(rune(48+fileCounter)) + ".dat"
 	}
-	writer := NewRotateWriter(fs, 20, getNextFilePath)
+	writer := NewRotateWriter(fs, 20, false, getNextFilePath)
 
 	// Write multiple records to trigger rotations
 	for i := 0; i < 5; i++ {
@@ -120,7 +120,7 @@ func TestRotateWriter_MultipleRotations(t *testing.T) {
 
 func TestRotateWriter_TombstoneWriting(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	writer := NewRotateWriter(fs, 100, func() string { return "testfile.dat" })
+	writer := NewRotateWriter(fs, 100, false, func() string { return "testfile.dat" })
 
 	filePath, _, err := writer.Write([]byte("key1"), []byte(""), true)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestRotateWriter_TombstoneWriting(t *testing.T) {
 }
 
 func TestRotateWriter_SyncWithoutWriter(t *testing.T) {
-	writer := NewRotateWriter(afero.NewMemMapFs(), 10, func() string { return "testfile.dat" })
+	writer := NewRotateWriter(afero.NewMemMapFs(), 10, false, func() string { return "testfile.dat" })
 
 	// Sync without any write should not error
 	err := writer.Sync()
@@ -144,7 +144,7 @@ func TestRotateWriter_SyncWithoutWriter(t *testing.T) {
 
 func TestRotateWriter_EmptyKeyValue(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	writer := NewRotateWriter(fs, 100, func() string { return "testfile.dat" })
+	writer := NewRotateWriter(fs, 100, false, func() string { return "testfile.dat" })
 
 	_, _, err := writer.Write([]byte{}, []byte{}, false)
 	if err != nil {
