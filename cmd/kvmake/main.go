@@ -44,8 +44,8 @@ func main() {
 	defer store.Close()
 
 	for i := 0; i < *num; i++ {
-		key := randomBytes(rand.Intn(8) + 3)
-		value := randomBytes(rand.Intn(11) + 5)
+		key := randomBytes(rand.Intn(30) + 15)
+		value := randomBytes(rand.Intn(20) + 10)
 		if err := store.Put(key, value); err != nil {
 			fmt.Fprintf(flag.CommandLine.Output(), "write error: %v\n", err)
 		}

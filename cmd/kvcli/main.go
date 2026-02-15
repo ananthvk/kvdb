@@ -126,7 +126,7 @@ func main() {
 				err := store.Merge()
 				duration := time.Since(startTime)
 				if err == nil {
-					fmt.Printf("MERGE OK (took %s)\n", duration)
+					fmt.Printf("MERGE OK (took %s)\n> ", duration)
 				} else {
 					fmt.Println("MERGE ERR", err)
 				}

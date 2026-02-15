@@ -1,9 +1,27 @@
 # kvdb
 
-A fast key-value store based on [Bitcask](https://riak.com/assets/bitcask-intro.pdf)
+A simple, fast persistent key-value store based on [Bitcask](https://riak.com/assets/bitcask-intro.pdf)
+
+## How to run
+
+```
+$ go run ./cmd/kvcli <path to database directory>
+```
+
+To create dummy data,
+
+```
+$ go run ./cmd/kvjson -n 100000 -size 1024 -db testdb
+```
+
+or 
+
+```
+$ go run ./cmd/kvmake -n 5000_000 5mdb
+```
 
 
-## File format specification
+## File format specification for datafile
 
 All integer values are stored in Little Endian format
 
@@ -77,4 +95,9 @@ Keys have a maximum size of `1000 bytes (1 KB)`
 
 And values have a maximum size of `1000000 bytes  (1 MB)`
 
-Default value of max data file size is `5000000 bytes (5MB)` but it's configurable through `kvdb_store.meta` file
+Default value of max data file size is `12800000 bytes (128MB)` but it's configurable through `kvdb_store.meta` file
+
+## TODO
+
+- [ ] Handling of corrupted records & hint file
+- [ ] Crash recovery

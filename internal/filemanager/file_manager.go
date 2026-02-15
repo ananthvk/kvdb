@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ananthvk/kvdb/internal/datafile"
+	"github.com/ananthvk/kvdb/internal/hintfile"
 	"github.com/ananthvk/kvdb/internal/keydir"
 	"github.com/ananthvk/kvdb/internal/record"
 	"github.com/ananthvk/kvdb/internal/utils"
@@ -135,17 +136,29 @@ func (f *FileManager) ReadKeydir() (*keydir.Keydir, error) {
 			continue
 		}
 
-		reader, err := record.NewReader(f.fs, datafilePath)
+		// Check if there is a hint file
+		hintfilePath := filepath.Join(f.dataStoreRootPath, "hint", utils.GetHintFileName(id))
+		scanner, err := hintfile.NewScanner(f.fs, hintfilePath)
 		if err != nil {
-			fmt.Printf("build keydir, skip %s, error: %s\n", fileName, err)
-			continue
+			// Error while reading hint file / hint file does not exist, create the keydir from scratch
+			err = f.addRecordsToKeydir(kd, id)
+			if err != nil {
+				fmt.Printf("build keydir, %s error: %s\n", fileName, err)
+			}
+		} else {
+			// Use the hintfile to build the keydir
+			for {
+				rec, err := scanner.Scan()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					// TODO: In case of error, fall back to reading from actual datafile
+					return nil, err
+				}
+				kd.AddKeydirRecord(rec.Key, id, rec.ValueSize, rec.ValuePos, rec.Timestamp)
+			}
 		}
-
-		err = f.addRecordsToKeydir(kd, id)
-		if err != nil {
-			fmt.Printf("build keydir, %s error: %s\n", fileName, err)
-		}
-		reader.Close()
 	}
 	return kd, nil
 }

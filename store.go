@@ -11,6 +11,7 @@ import (
 
 	"github.com/ananthvk/kvdb/internal/datafile"
 	"github.com/ananthvk/kvdb/internal/filemanager"
+	"github.com/ananthvk/kvdb/internal/hintfile"
 	"github.com/ananthvk/kvdb/internal/keydir"
 	"github.com/ananthvk/kvdb/internal/metafile"
 	"github.com/ananthvk/kvdb/internal/record"
@@ -30,9 +31,9 @@ type DataStore struct {
 }
 
 const (
-	datastoreType          = "kvdb"          // Type of store
-	version                = "1.0.0"         // Version of the application
-	defaultMaxDatafileSize = 5 * 1000 * 1000 // In bytes (5 MB for testing)
+	datastoreType          = "kvdb"            // Type of store
+	version                = "1.0.0"           // Version of the application
+	defaultMaxDatafileSize = 128 * 1000 * 1000 // In bytes (128 MB)
 )
 
 // Create creates a datastore at the given path, if the path exists and an existing key store
@@ -68,6 +69,12 @@ func Create(fs afero.Fs, path string) (*DataStore, error) {
 	if err := fs.Mkdir(filepath.Join(path, "data"), os.ModePerm); err != nil {
 		return nil, err
 	}
+
+	// Make the hint/ folder
+	if err := fs.Mkdir(filepath.Join(path, "hint"), os.ModePerm); err != nil {
+		return nil, err
+	}
+
 	fm, err := filemanager.NewFileManager(fs, path, defaultMaxDatafileSize)
 	if err != nil {
 		return nil, err
@@ -186,8 +193,12 @@ func (dataStore *DataStore) Merge() error {
 	}
 	defer mergeWriter.Close()
 
+	var currentHintWriter *hintfile.Writer
+	var lastDataFilePath string = ""
+
 	for _, dataFile := range immutableFiles {
-		scanner, err := record.NewScanner(dataStore.fs, filepath.Join(dataStore.path, "data", utils.GetDataFileName(dataFile)))
+		filePath := filepath.Join(dataStore.path, "data", utils.GetDataFileName(dataFile))
+		scanner, err := record.NewScanner(dataStore.fs, filePath)
 		if err != nil {
 			// TODO: Skip this file from merge
 			fmt.Fprintf(os.Stderr, "Could not open file with id %d for merging\n", dataFile)
@@ -227,6 +238,31 @@ func (dataStore *DataStore) Merge() error {
 				return err
 			}
 
+			// If the file path has changed, we need to create a new hint file writer
+			if filePath != lastDataFilePath {
+				if currentHintWriter != nil {
+					currentHintWriter.Close()
+				}
+				hintPath := filepath.Join(dataStore.path, "hint", filepath.Base(filePath))
+				currentHintWriter, err = hintfile.NewWriter(dataStore.fs, hintPath)
+				if err != nil {
+					return err
+				}
+				lastDataFilePath = filePath
+			}
+
+			// Write to hint file
+			err = currentHintWriter.WriteHintRecord(&hintfile.HintRecord{
+				Timestamp: rec.Header.Timestamp,
+				KeySize:   rec.Header.KeySize,
+				ValueSize: rec.Header.ValueSize,
+				ValuePos:  newPos,
+				Key:       rec.Key,
+			})
+			if err != nil {
+				return err
+			}
+
 			valueLocations[string(rec.Key)] = valueLoc{
 				path:         filePath,
 				offset:       newPos,
@@ -235,6 +271,10 @@ func (dataStore *DataStore) Merge() error {
 			}
 		}
 		scanner.Close()
+	}
+
+	if currentHintWriter != nil {
+		currentHintWriter.Close()
 	}
 
 	// TODO: fsync the directory (after rename)
@@ -249,10 +289,14 @@ func (dataStore *DataStore) Merge() error {
 	dataStore.mu.Unlock()
 
 	// Now, rename all temporary files starting from startId
+	// Also rename hint files
 	realFileIds := make(map[string]int)
 	for i, mergeFilePath := range tempFilesList {
 		realId := startId + i
 		dataStore.fs.Rename(mergeFilePath, filepath.Join(dataStore.path, "data", utils.GetDataFileName(realId)))
+
+		hintPath := filepath.Join(dataStore.path, "hint", filepath.Base(mergeFilePath))
+		dataStore.fs.Rename(hintPath, filepath.Join(dataStore.path, "hint", utils.GetHintFileName(realId)))
 
 		// To be used when updating keydir
 		realFileIds[mergeFilePath] = realId
@@ -272,10 +316,12 @@ func (dataStore *DataStore) Merge() error {
 	}
 	dataStore.mu.Unlock()
 
-	// Delete old immutable files
+	// Delete old immutable files & hints
 	for _, dataFile := range immutableFiles {
 		filePath := filepath.Join(dataStore.path, "data", utils.GetDataFileName(dataFile))
+		hintFilePath := filepath.Join(dataStore.path, "hint", utils.GetHintFileName(dataFile))
 		dataStore.fs.Remove(filePath)
+		dataStore.fs.Remove(hintFilePath)
 	}
 
 	dataStore.fileManager.CloseAndDeleteReaders(immutableFiles)
