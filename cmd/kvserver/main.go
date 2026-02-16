@@ -30,6 +30,8 @@ func main() {
 		return
 	}
 	store := internal.NewKVStore(*dbPtr)
+	store.StartBackgroundSync()
+	store.StartBackgroundMerge()
 	if store == nil {
 		slog.Error("datastore could not be openend, exiting")
 		os.Exit(1)

@@ -8,6 +8,12 @@ import (
 	"github.com/spf13/afero"
 )
 
+// Sync every 30s
+const syncInterval = time.Second * 30
+
+// Merge every 1min (TODO: make it configurable later)
+const mergeInterval = time.Minute * 2
+
 // A wrapper around store, that also implements background compaction
 // and periodic Sync
 
@@ -43,6 +49,32 @@ func NewKVStore(datastorePath string) *KVStore {
 		Path:  datastorePath,
 		Store: store,
 	}
+}
+
+func (kv *KVStore) StartBackgroundSync() {
+	// TODO: Add context, cancellation, channels to close background goroutine
+	go func() {
+		ticker := time.NewTicker(syncInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			slog.Info("background sync started")
+			err := kv.Store.Sync()
+			slog.Info("background sync finished", "err", err)
+		}
+	}()
+}
+
+func (kv *KVStore) StartBackgroundMerge() {
+	// TODO: Add context, cancellation, channels to close background goroutine
+	go func() {
+		ticker := time.NewTicker(mergeInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			slog.Info("background merge started")
+			err := kv.Store.Merge()
+			slog.Info("merging finished", "err", err)
+		}
+	}()
 }
 
 func (kv *KVStore) Close() error {

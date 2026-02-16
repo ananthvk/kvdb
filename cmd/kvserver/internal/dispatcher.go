@@ -9,4 +9,6 @@ var Commands = map[string]CommandFunc{
 	"PING": handlePing,
 	"GET":  handleGet,
 	"SET":  handleSet,
+	"KEYS": handleKeys,
+	"DEL":  handleDel,
 }

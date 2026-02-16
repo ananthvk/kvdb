@@ -165,6 +165,21 @@ func (dataStore *DataStore) Delete(key []byte) error {
 	return err
 }
 
+// DeleteWithExists deletes the value associated with the specified key. No error will be returned if the key does not exist.
+// An error is returned if the deletion failed due to some other reason.
+// true is returned if the key existed, and false if the key did not exist
+func (dataStore *DataStore) DeleteWithExists(key []byte) (bool, error) {
+	dataStore.mu.Lock()
+	defer dataStore.mu.Unlock()
+	// TODO: Check if we should write a record if the did not exist ?
+	// i.e. should the keydir check below come first
+	_, _, err := dataStore.fileManager.Write(key, nil, true)
+	if err != nil {
+		return false, err
+	}
+	return dataStore.keydir.DeleteRecordWithExists(key), nil
+}
+
 // ListKeys returns a list of all keys in the datastore. Note: This is intended to be
 // used for debug or inspection.
 func (dataStore *DataStore) ListKeys() ([]string, error) {

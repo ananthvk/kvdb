@@ -1,14 +1,45 @@
 # kvdb
 
-A simple, fast persistent key-value store based on [Bitcask](https://riak.com/assets/bitcask-intro.pdf)
+A simple, fast persistent key-value store based on [Bitcask](https://riak.com/assets/bitcask-intro.pdf), and a TCP server compatible with the Redis protocol (RESP)
 
 ## How to run
+
+### Install
+
+```
+$ go install github.com/ananthvk/kvdb/cmd/kvserver@latest
+```
+
+Then use it as,
+
+```
+$ kvserver -db mydb
+```
+
+Or, clone this repository, and then run the following commands
+
+### Standalone CLI
 
 ```
 $ go run ./cmd/kvcli <path to database directory>
 ```
 
-To create dummy data,
+### To run the redis compatible server
+
+```
+$ go run ./cmd/kvserver -db <path to db directory> -host 0.0.0.0 -port 6379
+```
+
+For example,
+```
+$ go run ./cmd/kvserver -db mydb
+```
+
+Access the server through `redis-cli`
+
+Supported commands: `GET`, `SET`, `ECHO`, `PING`, `KEYS *`, `DEL`
+
+### To create dummy data,
 
 ```
 $ go run ./cmd/kvjson -n 100000 -size 1024 -db testdb
@@ -19,6 +50,14 @@ or
 ```
 $ go run ./cmd/kvmake -n 5000_000 5mdb
 ```
+
+## Features
+
+- Merge and compaction to remove stale keys, and merge datafiles
+- Hint files to improve startup time
+- Redis (RESP) compatible TCP server
+- Supports multiple readers, and a single writer (same process)
+- Log rotation determined by log file size
 
 
 ## File format specification for datafile
@@ -101,3 +140,6 @@ Default value of max data file size is `12800000 bytes (128MB)` but it's configu
 
 - [ ] Handling of corrupted records & hint file
 - [ ] Crash recovery
+- [ ] Add support for multiple processes
+- [ ] Implement TTL
+- [ ] Graceful shutdown 

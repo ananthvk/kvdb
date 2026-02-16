@@ -48,6 +48,13 @@ func (k *Keydir) DeleteRecord(key []byte) {
 	delete(k.mp, string(key))
 }
 
+// Returns true if the key existed before deletion
+func (k *Keydir) DeleteRecordWithExists(key []byte) bool {
+	_, ok := k.mp[string(key)]
+	delete(k.mp, string(key))
+	return ok
+}
+
 // GetAllKeys retrieves all keys in the Keydir as a slice
 func (k *Keydir) GetAllKeys() []string {
 	keys := make([]string, 0, len(k.mp))
