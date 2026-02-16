@@ -2,8 +2,10 @@ package resp
 
 type ValueType int
 
+const maxBulkStringSize = 1024 * 1024 // 1 MiB
+
 const (
-	ValueTypeNil ValueType = iota
+	ValueTypeNull ValueType = iota
 	ValueTypeSimpleString
 	ValueTypeSimpleError
 	ValueTypeInteger

@@ -6,8 +6,6 @@ import (
 	"slices"
 )
 
-const maxBulkStringSize = 1024 * 1024 // 1 MiB
-
 // All these deserialize functions must be called depending upon the type, i.e. after parsing the
 // first byte of the input
 
@@ -158,8 +156,19 @@ func Deserialize(r *bufio.Reader) (Value, error) {
 		return DeserializeBulkString(r)
 	case '*':
 		return DeserializeArray(r)
+	case '_':
+		return DeserializeNull(r)
 	}
 	return Value{}, ErrUnknownValueType
+}
+
+// DeserializeNull deserializes a null value. It should be called after '_' has been processed.
+// It verifies that the next bytes are \r\n
+func DeserializeNull(r *bufio.Reader) (Value, error) {
+	if err := checkCLRF(r); err != nil {
+		return Value{}, err
+	}
+	return Value{Type: ValueTypeNull}, nil
 }
 
 // DeserializeInteger deserializes a signed 64-bit signed integer. It should be called after ':' has been processed

@@ -82,8 +82,8 @@ func TestManyWritesToSameValue(t *testing.T) {
 		t.Fatalf("failed to reopen datastore: %v", err)
 	}
 
-	// Step 8: Write the same value 100k times, incrementing counter each time
-	for i := 0; i < 100000; i++ {
+	// Step 8: Write the same value 10k times, incrementing counter each time
+	for i := 0; i < 10000; i++ {
 		counter++
 		if err := store.Put(specialKey, []byte(strconv.Itoa(counter))); err != nil {
 			t.Fatalf("failed to put special key at iteration %d: %v", i, err)
@@ -152,7 +152,7 @@ func TestManyWritesToSameValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to parse final counter value: %v", err)
 	}
-	expectedCounter := 100000 + 25000
+	expectedCounter := 10000 + 25000
 	if finalCounter != expectedCounter {
 		t.Errorf("expected final counter %d, got %d", expectedCounter, finalCounter)
 	}

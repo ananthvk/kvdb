@@ -594,6 +594,13 @@ func TestDeserialize(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name:     "null value",
+			input:    "_\r\n",
+			wantType: ValueTypeNull,
+			validate: func(t *testing.T, v Value) {},
+			wantErr:  nil,
+		},
+		{
 			name:     "empty simple string",
 			input:    "+\r\n",
 			wantType: ValueTypeSimpleString,
