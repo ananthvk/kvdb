@@ -7,4 +7,6 @@ type CommandFunc func(args []resp.Value, store *KVStore) resp.Value
 var Commands = map[string]CommandFunc{
 	"ECHO": handleEcho,
 	"PING": handlePing,
+	"GET":  handleGet,
+	"SET":  handleSet,
 }
