@@ -4,6 +4,22 @@ A simple, fast persistent key-value store based on [Bitcask](https://riak.com/as
 
 ## How to run
 
+### Using docker (recommended)
+
+```
+$ docker run -p 6379:6379 -t ananthvk0/kvdb:0.0.1 -db <databasename>
+```
+
+To ensure that data does not get lost on container restart,
+```
+$ docker run \
+  -p 6379:6379 \
+  -v kv-volume:/data \
+  ananthvk0/kvdb:0.0.1 \
+  -db /data/mydb
+```
+
+
 ### Install
 
 ```
